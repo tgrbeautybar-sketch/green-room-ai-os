@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Avatar } from "@/components/ui/Avatar";
@@ -15,15 +15,71 @@ const TYPES: { id: PostType; label: string; desc: string; eyebrow: string }[] = 
 
 const PLACEHOLDERS = ["🌿", "✂️", "💇", "✨"];
 
+type Draft = { caption: string; hashtags: string[]; cta: string; mode: "live" | "demo" };
+
 export default function PostStudio() {
   const [type, setType] = useState<PostType>("spotlight");
   const [stylistId, setStylistId] = useState<string>(stylists[1].id);
   const [seed, setSeed] = useState<number>(7);
   const [scheduled, setScheduled] = useState(false);
+  const [igOn, setIgOn] = useState(true);
+  const [fbOn, setFbOn] = useState(true);
+  const [uploads, setUploads] = useState<string[]>([]); // data URLs
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const stylist = stylists.find(s => s.id === stylistId)!;
-  const draft = useMemo(() => draftCaption(type, stylist, seed), [type, stylist, seed]);
-  const carousel = useMemo(() => Array.from({ length: 3 }, (_, i) => PLACEHOLDERS[(seed + i) % PLACEHOLDERS.length]), [seed]);
+
+  // Demo-mode initial draft (instant). Replaced by API call on Re-draft.
+  const fallbackDraft = useMemo(() => draftCaption(type, stylist, seed), [type, stylist, seed]);
+  const [draft, setDraft] = useState<Draft>({ ...fallbackDraft, mode: "demo" });
+  const [drafting, setDrafting] = useState(false);
+
+  // Re-seed fallback when type/stylist changes (instant UX)
+  useEffect(() => {
+    setDraft({ ...fallbackDraft, mode: "demo" });
+    setScheduled(false);
+  }, [type, stylistId]);
+
+  const carousel = useMemo(() => {
+    if (uploads.length > 0) return uploads.slice(0, 3);
+    return Array.from({ length: 3 }, (_, i) => PLACEHOLDERS[(seed + i) % PLACEHOLDERS.length]);
+  }, [seed, uploads]);
+
+  async function regenerate() {
+    setDrafting(true);
+    setScheduled(false);
+    try {
+      const res = await fetch("/api/social/draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, stylistId, seed }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as Draft;
+        setDraft(data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []).slice(0, 3);
+    if (files.length === 0) return;
+    Promise.all(
+      files.map(
+        f =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(f);
+          })
+      )
+    ).then(setUploads);
+  }
 
   return (
     <div className="space-y-6">
@@ -43,7 +99,7 @@ export default function PostStudio() {
         {TYPES.map(t => (
           <button
             key={t.id}
-            onClick={() => { setType(t.id); setScheduled(false); }}
+            onClick={() => { setType(t.id); }}
             className={[
               "group text-left rounded-2xl border p-4 transition",
               type === t.id
@@ -68,10 +124,11 @@ export default function PostStudio() {
             title="Configure"
             action={
               <button
-                onClick={() => { setSeed(s => s + 1); setScheduled(false); }}
-                className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 hover:border-moss-500"
+                onClick={() => { setSeed(s => s + 1); regenerate(); }}
+                disabled={drafting}
+                className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-60"
               >
-                Re-draft ↻
+                {drafting ? "Drafting…" : "Re-draft ↻"}
               </button>
             }
           />
@@ -83,7 +140,7 @@ export default function PostStudio() {
                 {stylists.filter(s => s.role !== "Owner").map(s => (
                   <button
                     key={s.id}
-                    onClick={() => { setStylistId(s.id); setScheduled(false); }}
+                    onClick={() => { setStylistId(s.id); }}
                     className={[
                       "flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 transition",
                       s.id === stylistId
@@ -105,28 +162,48 @@ export default function PostStudio() {
           <div className="mt-5">
             <label className="block text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Assets</label>
             <div className="mt-2 grid grid-cols-3 gap-2">
-              {carousel.map((emoji, i) => (
+              {carousel.map((src, i) => (
                 <div key={i} className="aspect-square overflow-hidden rounded-xl border border-dashed border-moss-700/15 bg-cream">
-                  <div className="grid h-full place-items-center bg-gradient-to-br from-moss-100/40 to-champagne-100 text-4xl">{emoji}</div>
+                  {typeof src === "string" && src.startsWith("data:")
+                    ? <img src={src} alt="" className="h-full w-full object-cover" />
+                    : <div className="grid h-full place-items-center bg-gradient-to-br from-moss-100/40 to-champagne-100 text-4xl">{src}</div>}
                 </div>
               ))}
             </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={onFiles}
+            />
             <button
-              onClick={() => setSeed(s => s + 7)}
-              className="mt-2 w-full rounded-xl border border-dashed border-moss-700/20 bg-white/60 py-3 text-[13px] text-muted hover:border-moss-300"
+              onClick={() => fileRef.current?.click()}
+              className="mt-2 w-full rounded-xl border border-dashed border-moss-700/20 bg-white/60 py-3 text-[13px] text-muted transition hover:border-moss-300 hover:text-moss-700"
             >
-              + Drop images, or screenshot a stylist's IG to build the carousel
+              {uploads.length > 0 ? `${uploads.length} image${uploads.length === 1 ? "" : "s"} loaded — tap to replace` : "+ Drop images, or pick from your phone"}
             </button>
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-2 text-[12px]">
-            <Channel label="Instagram" enabled />
-            <Channel label="Facebook" enabled />
+            <Channel label="Instagram" enabled={igOn} onToggle={() => setIgOn(v => !v)} />
+            <Channel label="Facebook" enabled={fbOn} onToggle={() => setFbOn(v => !v)} />
           </div>
         </Card>
 
         <Card>
-          <CardHead eyebrow="Step 2" title="Preview & approve" action={<Pill tone="champagne">draft</Pill>} />
+          <CardHead
+            eyebrow="Step 2"
+            title="Preview & approve"
+            action={
+              <div className="flex items-center gap-2">
+                {draft.mode === "live"
+                  ? <Pill tone="moss">drafted by Claude</Pill>
+                  : <Pill tone="champagne">demo draft</Pill>}
+              </div>
+            }
+          />
           <div className="rounded-2xl border border-moss-700/8 bg-cream p-4">
             <div className="flex items-center gap-2">
               <Avatar initials="GR" hueDeg={130} size={36} />
@@ -137,25 +214,32 @@ export default function PostStudio() {
             </div>
 
             <div className="mt-3 grid aspect-[4/5] grid-cols-3 overflow-hidden rounded-xl">
-              {carousel.map((e, i) => (
+              {carousel.map((src, i) => (
                 <div
                   key={i}
                   className="grid place-items-center text-5xl"
-                  style={{
-                    background: i === 0
-                      ? "linear-gradient(135deg, #dce5dd 0%, #b9ccba 100%)"
-                      : i === 1
-                      ? "linear-gradient(135deg, #f5ecd9 0%, #ebdab3 100%)"
-                      : "linear-gradient(135deg, #1f3d2e 0%, #2a5230 100%)",
-                    color: i === 2 ? "#f5ecd9" : "#1f3d2e",
-                  }}
+                  style={
+                    typeof src === "string" && src.startsWith("data:")
+                      ? { backgroundImage: `url(${src})`, backgroundSize: "cover", backgroundPosition: "center" }
+                      : {
+                          background:
+                            i === 0
+                              ? "linear-gradient(135deg, #dce5dd 0%, #b9ccba 100%)"
+                              : i === 1
+                              ? "linear-gradient(135deg, #f5ecd9 0%, #ebdab3 100%)"
+                              : "linear-gradient(135deg, #1f3d2e 0%, #2a5230 100%)",
+                          color: i === 2 ? "#f5ecd9" : "#1f3d2e",
+                        }
+                  }
                 >
-                  {e}
+                  {typeof src === "string" && src.startsWith("data:") ? null : src}
                 </div>
               ))}
             </div>
 
-            <div className="mt-3 whitespace-pre-wrap text-[14px] leading-relaxed text-ink">{draft.caption}</div>
+            <div className="mt-3 whitespace-pre-wrap text-[14px] leading-relaxed text-ink">
+              {drafting ? "Sage is drafting in the Green Room voice…" : draft.caption}
+            </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {draft.hashtags.map(h => <span key={h} className="text-[12px] text-moss-500">{h}</span>)}
             </div>
@@ -165,19 +249,24 @@ export default function PostStudio() {
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
               onClick={() => setScheduled(true)}
-              disabled={scheduled}
+              disabled={scheduled || (!igOn && !fbOn) || drafting}
               className="rounded-lg bg-moss-700 px-4 py-2 text-sm font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
             >
-              {scheduled ? "Scheduled ✓" : "Schedule for today 5:30 PM"}
+              {scheduled
+                ? "Scheduled ✓"
+                : (!igOn && !fbOn)
+                ? "Pick a channel"
+                : `Schedule today 5:30 PM · ${[igOn && "IG", fbOn && "FB"].filter(Boolean).join(" + ")}`}
             </button>
             <button
-              onClick={() => setSeed(s => s + 1)}
-              className="rounded-lg border border-moss-700/15 bg-white px-4 py-2 text-sm font-medium text-moss-700 hover:border-moss-500"
+              onClick={() => { setSeed(s => s + 13); regenerate(); }}
+              disabled={drafting}
+              className="rounded-lg border border-moss-700/15 bg-white px-4 py-2 text-sm font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-60"
             >
-              Tweak voice ↻
+              {drafting ? "…" : "Tweak voice ↻"}
             </button>
             {scheduled && (
-              <span className="text-[12px] text-muted">Demo only — live wiring uses Meta Graph API.</span>
+              <span className="text-[12px] text-muted">Demo only — live mode uses Meta Graph API.</span>
             )}
           </div>
         </Card>
@@ -205,14 +294,18 @@ export default function PostStudio() {
   );
 }
 
-function Channel({ label, enabled }: { label: string; enabled: boolean }) {
+function Channel({ label, enabled, onToggle }: { label: string; enabled: boolean; onToggle: () => void }) {
   return (
-    <label className={[
-      "flex cursor-pointer items-center justify-between rounded-xl border px-3 py-2 transition",
-      enabled ? "border-moss-500 bg-moss-100/40" : "border-moss-700/10 bg-white",
-    ].join(" ")}>
-      <span className="font-medium text-moss-700">{label}</span>
+    <button
+      onClick={onToggle}
+      className={[
+        "flex w-full cursor-pointer items-center justify-between rounded-xl border px-3 py-2 transition",
+        enabled ? "border-moss-500 bg-moss-100/40 text-moss-700" : "border-moss-700/10 bg-white text-muted hover:border-moss-300",
+      ].join(" ")}
+      type="button"
+    >
+      <span className="font-medium">{label}</span>
       <span className={`h-2 w-2 rounded-full ${enabled ? "bg-moss-500" : "bg-moss-200"}`} />
-    </label>
+    </button>
   );
 }

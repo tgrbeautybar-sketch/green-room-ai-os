@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { BarRow } from "@/components/ui/Sparkline";
@@ -22,6 +22,8 @@ const STATUS_LABEL: Record<RentStatus, string> = {
   late: "2nd nudge",
 };
 
+type Tone = "warmer" | "firmer" | "playful";
+
 function fmtUSD(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 }
@@ -31,6 +33,8 @@ export default function RentRollPage() {
   const [filter, setFilter] = useState<"all" | "outstanding" | "paid">("all");
   const [activeId, setActiveId] = useState<string | null>(rentRoll.find(r => r.status !== "paid")?.stylistId ?? null);
   const [sent, setSent] = useState<Set<string>>(new Set());
+  const [overrides, setOverrides] = useState<Record<string, { text: string; mode: "live" | "demo" }>>({});
+  const [tweaking, setTweaking] = useState<Tone | null>(null);
 
   const visible = rentRoll.filter(r => {
     if (filter === "all") return true;
@@ -39,7 +43,29 @@ export default function RentRollPage() {
   });
 
   const active = rentRoll.find(r => r.stylistId === activeId);
-  const draft = active ? draftReminderText(active) : null;
+  const overridden = active ? overrides[active.stylistId] : undefined;
+  const draft = active ? (overridden?.text ?? draftReminderText(active)) : null;
+
+  // When user switches active stylist, clear local tweak in-flight state.
+  useEffect(() => { setTweaking(null); }, [activeId]);
+
+  async function tweakTone(tone: Tone) {
+    if (!active) return;
+    setTweaking(tone);
+    try {
+      const res = await fetch("/api/rent/tweak-tone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stylistId: active.stylistId, tone }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { text: string; mode: "live" | "demo" };
+        setOverrides(prev => ({ ...prev, [active.stylistId]: data }));
+      }
+    } finally {
+      setTweaking(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -129,10 +155,14 @@ export default function RentRollPage() {
         </Card>
 
         <Card>
-          <CardHead eyebrow={active ? "Drafted reminder" : "Pick a stylist"} title={active ? `For ${active.name.split(" ")[0]}` : "—"} />
+          <CardHead
+            eyebrow={active ? "Drafted reminder" : "Pick a stylist"}
+            title={active ? `For ${active.name.split(" ")[0]}` : "—"}
+            action={overridden?.mode === "live" ? <Pill tone="moss">tweaked by Claude</Pill> : null}
+          />
           {active && draft ? (
             <div className="space-y-3">
-              <div className="rounded-xl border border-moss-700/8 bg-cream p-4 text-[14px] leading-relaxed text-ink">
+              <div className="rounded-xl border border-moss-700/8 bg-cream p-4 text-[14px] leading-relaxed text-ink whitespace-pre-wrap">
                 {draft}
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -143,9 +173,29 @@ export default function RentRollPage() {
                 >
                   {active.status === "paid" ? "Already paid ✓" : sent.has(active.stylistId) ? "Sent ✓" : `Send to ${active.name.split(" ")[0]}`}
                 </button>
-                <button className="rounded-lg border border-moss-700/15 bg-white px-4 py-2 text-sm font-medium text-moss-700 hover:border-moss-500">
-                  Tweak tone ↻
-                </button>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(["warmer", "firmer", "playful"] as const).map(t => (
+                    <button
+                      key={t}
+                      onClick={() => tweakTone(t)}
+                      disabled={!!tweaking}
+                      className={[
+                        "rounded-lg border bg-white px-3 py-2 text-[12px] font-medium capitalize transition disabled:opacity-60",
+                        tweaking === t ? "border-moss-500 text-moss-700" : "border-moss-700/15 text-moss-700 hover:border-moss-500",
+                      ].join(" ")}
+                    >
+                      {tweaking === t ? "…" : t}
+                    </button>
+                  ))}
+                  {overridden && (
+                    <button
+                      onClick={() => active && setOverrides(prev => { const n = { ...prev }; delete n[active.stylistId]; return n; })}
+                      className="rounded-lg border border-moss-700/15 bg-white px-3 py-2 text-[12px] text-muted hover:border-moss-500"
+                    >
+                      reset
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-[11px] text-muted">
                 Demo mode shows the text only. Live mode sends via Twilio after a 5pm grace window.

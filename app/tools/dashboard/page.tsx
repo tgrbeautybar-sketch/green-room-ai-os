@@ -6,7 +6,7 @@ import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Sparkline, BarRow } from "@/components/ui/Sparkline";
 import { Avatar } from "@/components/ui/Avatar";
 import { useViewAs } from "@/components/shell/ViewAsProvider";
-import { stylists, findStylist } from "@/lib/demo/stylists";
+import { stylists, findStylist, OWNER_ID } from "@/lib/demo/stylists";
 import { metricsFor, dailySeries, bookings } from "@/lib/demo/bookings";
 import { rentSummary } from "@/lib/demo/payments";
 
@@ -21,7 +21,7 @@ function fmtUSD(n: number) {
 }
 
 export default function Dashboard() {
-  const { viewAsId } = useViewAs();
+  const { viewAsId, setViewAsId } = useViewAs();
   const [win, setWin] = useState(30);
 
   const scope = viewAsId === "all" ? "all" : viewAsId;
@@ -134,27 +134,42 @@ export default function Dashboard() {
             {leaderboard.map(({ s, m: sm }, idx) => {
               const isMe = s.id === viewAsId;
               return (
-                <li key={s.id} className={[
-                  "flex items-center gap-3 py-3",
-                  isMe ? "rounded-xl bg-champagne-100/50 px-2" : "",
-                ].join(" ")}>
-                  <span className="w-5 text-right text-[11px] tabular-nums text-muted">{idx + 1}</span>
-                  <Avatar initials={s.initials} hueDeg={s.hueDeg} size={32} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <div className="truncate text-[14px] font-medium text-moss-700">{s.name}</div>
-                      {isMe && <Pill tone="champagne">you</Pill>}
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onClick={() => setViewAsId(isMe ? "all" : s.id)}
+                    className={[
+                      "flex w-full items-center gap-3 py-3 text-left transition rounded-xl px-2 -mx-2",
+                      isMe ? "bg-champagne-100/50" : "hover:bg-moss-100/30",
+                    ].join(" ")}
+                  >
+                    <span className="w-5 text-right text-[11px] tabular-nums text-muted">{idx + 1}</span>
+                    <Avatar initials={s.initials} hueDeg={s.hueDeg} size={32} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-2">
+                        <div className="truncate text-[14px] font-medium text-moss-700">{s.name}</div>
+                        {isMe && <Pill tone="champagne">viewing as</Pill>}
+                      </div>
+                      <div className="text-[12px] text-muted">{s.role} · {s.chair} · {sm.bookings} bookings</div>
                     </div>
-                    <div className="text-[12px] text-muted">{s.role} · {s.chair} · {sm.bookings} bookings</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[14px] font-semibold text-moss-700">{fmtUSD(sm.gross)}</div>
-                    <div className="text-[11px] text-muted">{Math.round(sm.retention * 100)}% retention</div>
-                  </div>
+                    <div className="text-right">
+                      <div className="text-[14px] font-semibold text-moss-700">{fmtUSD(sm.gross)}</div>
+                      <div className="text-[11px] text-muted">{Math.round(sm.retention * 100)}% retention</div>
+                    </div>
+                  </button>
                 </li>
               );
             })}
           </ul>
+          {viewAsId !== "all" && (
+            <button
+              type="button"
+              onClick={() => setViewAsId("all")}
+              className="mt-3 text-[12px] font-medium text-moss-500 hover:text-moss-700"
+            >
+              ← back to all stylists
+            </button>
+          )}
         </Card>
 
         <div className="space-y-5">

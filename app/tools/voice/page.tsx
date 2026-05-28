@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Avatar } from "@/components/ui/Avatar";
@@ -14,12 +14,43 @@ const OUTCOME_TONE: Record<string, "moss" | "champagne" | "rose" | "neutral"> = 
   answered: "champagne",
 };
 
+type SaveState = "idle" | "saving" | "saved" | "error";
+
 export default function VoiceAgent() {
   const [selectedId, setSelectedId] = useState(callScripts[0].id);
   const [prompt, setPrompt] = useState(defaultSystemPrompt);
-  const [promptDirty, setPromptDirty] = useState(false);
+  const [baseline, setBaseline] = useState(defaultSystemPrompt);
+  const [saveState, setSaveState] = useState<SaveState>("idle");
 
+  useEffect(() => {
+    fetch("/api/voice/prompt").then(async r => {
+      if (!r.ok) return;
+      const data = (await r.json()) as { prompt: string; saved: boolean };
+      setPrompt(data.prompt);
+      setBaseline(data.prompt);
+    }).catch(() => {});
+  }, []);
+
+  const dirty = prompt !== baseline;
   const selected = callScripts.find(c => c.id === selectedId)!;
+
+  async function savePrompt() {
+    setSaveState("saving");
+    try {
+      const res = await fetch("/api/voice/prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setBaseline(prompt);
+      setSaveState("saved");
+      setTimeout(() => setSaveState("idle"), 1800);
+    } catch {
+      setSaveState("error");
+      setTimeout(() => setSaveState("idle"), 2400);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -106,32 +137,36 @@ export default function VoiceAgent() {
           title="How Sage answers the phone"
           action={
             <div className="flex gap-2">
-              {promptDirty && (
+              {dirty && (
                 <button
-                  onClick={() => { setPrompt(defaultSystemPrompt); setPromptDirty(false); }}
+                  onClick={() => setPrompt(baseline)}
                   className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] text-moss-700 hover:border-moss-500"
                 >
                   Revert
                 </button>
               )}
               <button
-                disabled={!promptDirty}
+                onClick={savePrompt}
+                disabled={!dirty || saveState === "saving"}
                 className="rounded-lg bg-moss-700 px-3 py-1.5 text-[12px] text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
               >
-                {promptDirty ? "Save changes" : "Saved ✓"}
+                {saveState === "saving" ? "Saving…"
+                  : saveState === "saved" ? "Saved ✓"
+                  : saveState === "error" ? "Retry"
+                  : dirty ? "Save changes" : "Saved ✓"}
               </button>
             </div>
           }
         />
         <textarea
           value={prompt}
-          onChange={e => { setPrompt(e.target.value); setPromptDirty(true); }}
+          onChange={e => setPrompt(e.target.value)}
           rows={12}
           className="w-full resize-none rounded-xl border border-moss-700/10 bg-cream/60 p-4 font-mono text-[12.5px] leading-relaxed text-moss-800 outline-none transition focus:border-moss-500"
         />
         <p className="mt-2 text-[11px] text-muted">
           Live mode wires this prompt + the 12-stylist roster into Retell. Demo mode plays the scripted
-          calls above.
+          calls above. Saved prompts persist between dev-server restarts.
         </p>
       </Card>
 
