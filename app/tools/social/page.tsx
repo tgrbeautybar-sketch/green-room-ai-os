@@ -4,13 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Avatar } from "@/components/ui/Avatar";
-import { stylists } from "@/lib/demo/stylists";
 import { draftCaption, PostType } from "@/lib/demo/captions";
 
 const TYPES: { id: PostType; label: string; desc: string; eyebrow: string }[] = [
-  { id: "spotlight", label: "Stylist Spotlight", desc: "Highlight one of your stylists and link their book.", eyebrow: "Tool 01 · Post" },
-  { id: "chair",     label: "Chair / Room Open", desc: "Recruit a new stylist into a suite or chair.",         eyebrow: "Tool 01 · Post" },
-  { id: "brand",     label: "Salon Brand Post",  desc: "A piece of voice — no specific person.",               eyebrow: "Tool 01 · Post" },
+  { id: "brand", label: "Salon Brand Post",  desc: "A piece of The Green Room's voice — for the salon page.", eyebrow: "Tool 01 · Post" },
+  { id: "chair", label: "Chair / Room Open", desc: "Recruit a new stylist into a suite or chair.",            eyebrow: "Tool 01 · Post" },
 ];
 
 const PLACEHOLDERS = ["🌿", "✂️", "💇", "✨"];
@@ -18,27 +16,26 @@ const PLACEHOLDERS = ["🌿", "✂️", "💇", "✨"];
 type Draft = { caption: string; hashtags: string[]; cta: string; mode: "live" | "demo" };
 
 export default function PostStudio() {
-  const [type, setType] = useState<PostType>("spotlight");
-  const [stylistId, setStylistId] = useState<string>(stylists[1].id);
+  const [type, setType] = useState<PostType>("brand");
   const [seed, setSeed] = useState<number>(7);
   const [scheduled, setScheduled] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [publishMode, setPublishMode] = useState<"live" | "demo" | null>(null);
   const [igOn, setIgOn] = useState(true);
   const [fbOn, setFbOn] = useState(true);
   const [uploads, setUploads] = useState<string[]>([]); // data URLs
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const stylist = stylists.find(s => s.id === stylistId)!;
-
   // Demo-mode initial draft (instant). Replaced by API call on Re-draft.
-  const fallbackDraft = useMemo(() => draftCaption(type, stylist, seed), [type, stylist, seed]);
+  const fallbackDraft = useMemo(() => draftCaption(type, undefined, seed), [type, seed]);
   const [draft, setDraft] = useState<Draft>({ ...fallbackDraft, mode: "demo" });
   const [drafting, setDrafting] = useState(false);
 
-  // Re-seed fallback when type/stylist changes (instant UX)
+  // Re-seed fallback when type changes (instant UX)
   useEffect(() => {
     setDraft({ ...fallbackDraft, mode: "demo" });
     setScheduled(false);
-  }, [type, stylistId]);
+  }, [type]);
 
   const carousel = useMemo(() => {
     if (uploads.length > 0) return uploads.slice(0, 3);
@@ -52,7 +49,7 @@ export default function PostStudio() {
       const res = await fetch("/api/social/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, stylistId, seed }),
+        body: JSON.stringify({ type, seed }),
       });
       if (res.ok) {
         const data = (await res.json()) as Draft;
@@ -62,6 +59,33 @@ export default function PostStudio() {
       console.error(err);
     } finally {
       setDrafting(false);
+    }
+  }
+
+  async function schedule() {
+    setScheduling(true);
+    try {
+      const res = await fetch("/api/social/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: draft.caption,
+          hashtags: draft.hashtags,
+          igOn,
+          fbOn,
+          // only real hosted URLs are usable live; uploaded previews are data: URLs
+          mediaUrls: uploads.filter(u => /^https?:\/\//.test(u)),
+        }),
+      });
+      const data = (await res.json()) as { mode?: "live" | "demo" };
+      if (res.ok) {
+        setScheduled(true);
+        setPublishMode(data.mode ?? "demo");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setScheduling(false);
     }
   }
 
@@ -133,32 +157,6 @@ export default function PostStudio() {
             }
           />
 
-          {type === "spotlight" && (
-            <div className="space-y-3">
-              <label className="block text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Stylist</label>
-              <div className="-mx-1 flex gap-2 overflow-x-auto pb-1">
-                {stylists.filter(s => s.role !== "Owner").map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => { setStylistId(s.id); }}
-                    className={[
-                      "flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 transition",
-                      s.id === stylistId
-                        ? "border-moss-500 bg-moss-100/40"
-                        : "border-moss-700/10 bg-white hover:border-moss-300",
-                    ].join(" ")}
-                  >
-                    <Avatar initials={s.initials} hueDeg={s.hueDeg} size={28} />
-                    <div className="text-left">
-                      <div className="text-[13px] font-medium text-moss-700">{s.name.split(" ")[0]}</div>
-                      <div className="text-[11px] text-muted">{s.role}</div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           <div className="mt-5">
             <label className="block text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Assets</label>
             <div className="mt-2 grid grid-cols-3 gap-2">
@@ -209,7 +207,7 @@ export default function PostStudio() {
               <Avatar initials="GR" hueDeg={130} size={36} />
               <div className="leading-tight">
                 <div className="text-[13px] font-semibold text-moss-700">thegreenroombeautybar</div>
-                <div className="text-[11px] text-muted">{type === "spotlight" ? `with ${stylist.handle}` : "Sponsored · The Green Room"}</div>
+                <div className="text-[11px] text-muted">Sponsored · The Green Room</div>
               </div>
             </div>
 
@@ -248,15 +246,17 @@ export default function PostStudio() {
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setScheduled(true)}
-              disabled={scheduled || (!igOn && !fbOn) || drafting}
+              onClick={schedule}
+              disabled={scheduled || scheduling || (!igOn && !fbOn) || drafting}
               className="rounded-lg bg-moss-700 px-4 py-2 text-sm font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
             >
-              {scheduled
+              {scheduling
+                ? "Publishing…"
+                : scheduled
                 ? "Scheduled ✓"
                 : (!igOn && !fbOn)
                 ? "Pick a channel"
-                : `Schedule today 5:30 PM · ${[igOn && "IG", fbOn && "FB"].filter(Boolean).join(" + ")}`}
+                : `Schedule · ${[igOn && "IG", fbOn && "FB"].filter(Boolean).join(" + ")}`}
             </button>
             <button
               onClick={() => { setSeed(s => s + 13); regenerate(); }}
@@ -266,7 +266,11 @@ export default function PostStudio() {
               {drafting ? "…" : "Tweak voice ↻"}
             </button>
             {scheduled && (
-              <span className="text-[12px] text-muted">Demo only — live mode uses Meta Graph API.</span>
+              <span className="text-[12px] text-muted">
+                {publishMode === "live"
+                  ? "Published via Zernio to your connected accounts."
+                  : "Demo — connect Zernio (free) to publish to IG + FB for real."}
+              </span>
             )}
           </div>
         </Card>
@@ -276,9 +280,9 @@ export default function PostStudio() {
         <CardHead eyebrow="History" title="Drafted today" />
         <ul className="divide-y divide-moss-700/8">
           {[
-            { who: "Melissa Tran",  what: "Stylist spotlight",   status: "scheduled", time: "9:14 AM" },
-            { who: "—",             what: "Brand post · neighborhood salon", status: "draft",     time: "11:02 AM" },
-            { who: "Suite 5 open",  what: "Chair / Room open",   status: "draft",     time: "4:18 PM" },
+            { who: "The Green Room", what: "Brand post · twelve stylists, one front door", status: "scheduled", time: "9:14 AM" },
+            { who: "The Green Room", what: "Brand post · neighborhood salon",               status: "draft",     time: "11:02 AM" },
+            { who: "Suite 5 open",   what: "Chair / Room open",                              status: "draft",     time: "4:18 PM" },
           ].map((row, i) => (
             <li key={i} className="flex items-center justify-between gap-3 py-3">
               <div className="min-w-0">

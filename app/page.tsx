@@ -4,24 +4,20 @@ import Link from "next/link";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Sparkline } from "@/components/ui/Sparkline";
-import { useViewAs } from "@/components/shell/ViewAsProvider";
 import { metricsFor, dailySeries } from "@/lib/demo/bookings";
 import { rentSummary } from "@/lib/demo/payments";
 import { callScripts } from "@/lib/demo/calls";
-import { stylists, findStylist } from "@/lib/demo/stylists";
+import { stylists } from "@/lib/demo/stylists";
 
 function fmtUSD(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 }
 
 export default function Overview() {
-  const { viewAsId } = useViewAs();
-  const scope = viewAsId === "all" ? "all" : viewAsId;
-  const m = metricsFor(scope, 30);
-  const series = dailySeries(scope, 30);
+  const m = metricsFor("all", 30);
+  const series = dailySeries("all", 30);
   const rent = rentSummary();
-  const scopeLabel =
-    viewAsId === "all" ? "The Green Room (all 12)" : findStylist(viewAsId)?.name ?? "All stylists";
+  const scopeLabel = "The Green Room (all 12)";
 
   return (
     <div className="space-y-8">

@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useViewAs, viewAsOptions } from "./ViewAsProvider";
+import { usePathname, useRouter } from "next/navigation";
 
 const NAV = [
   { href: "/", label: "Overview" },
@@ -14,7 +13,16 @@ const NAV = [
 
 export default function Topbar() {
   const path = usePathname();
-  const { viewAsId, setViewAsId } = useViewAs();
+  const router = useRouter();
+
+  // No chrome on the login screen.
+  if (path === "/login") return null;
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <header className="sticky top-0 z-30 border-b border-moss-700/10 bg-cream/85 backdrop-blur">
@@ -29,7 +37,7 @@ export default function Topbar() {
           </div>
         </Link>
 
-        <nav className="order-3 -mx-1 flex w-full gap-1 overflow-x-auto pt-1 sm:order-2 sm:ml-6 sm:w-auto sm:pt-0">
+        <nav className="order-3 -mx-1 flex w-full gap-1 overflow-x-auto pt-1 sm:order-2 sm:ml-auto sm:w-auto sm:pt-0">
           {NAV.map(n => {
             const active = n.href === "/" ? path === "/" : path?.startsWith(n.href);
             return (
@@ -49,17 +57,12 @@ export default function Topbar() {
           })}
         </nav>
 
-        <div className="order-2 ml-auto flex items-center gap-2 sm:order-3">
-          <label htmlFor="viewas" className="hidden text-[11px] uppercase tracking-[0.14em] text-muted sm:block">View as</label>
-          <select
-            id="viewas"
-            value={viewAsId}
-            onChange={e => setViewAsId(e.target.value)}
-            className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-sm text-moss-700 shadow-sm outline-none transition focus:border-moss-500"
-          >
-            {viewAsOptions().map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
-        </div>
+        <button
+          onClick={signOut}
+          className="order-2 ml-auto rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] text-moss-700 transition hover:border-moss-500 sm:order-3 sm:ml-2"
+        >
+          Sign out
+        </button>
       </div>
     </header>
   );

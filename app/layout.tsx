@@ -1,7 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import Topbar from "@/components/shell/Topbar";
-import { ViewAsProvider } from "@/components/shell/ViewAsProvider";
 
 export const metadata: Metadata = {
   title: "Green Room AI OS",
@@ -20,10 +19,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ViewAsProvider>
-          <Topbar />
-          <main className="mx-auto max-w-7xl px-5 pt-6 pb-24 sm:px-8">{children}</main>
-        </ViewAsProvider>
+        <Topbar />
+        <main className="mx-auto max-w-7xl px-5 pt-6 pb-24 sm:px-8">{children}</main>
       </body>
     </html>
   );

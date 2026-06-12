@@ -1,12 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
 import { Sparkline, BarRow } from "@/components/ui/Sparkline";
 import { Avatar } from "@/components/ui/Avatar";
-import { useViewAs } from "@/components/shell/ViewAsProvider";
-import { stylists, findStylist, OWNER_ID } from "@/lib/demo/stylists";
+import { stylists } from "@/lib/demo/stylists";
 import { metricsFor, dailySeries, bookings } from "@/lib/demo/bookings";
 import { rentSummary } from "@/lib/demo/payments";
 
@@ -20,40 +19,88 @@ function fmtUSD(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 }
 
+type SourceMode = "demo" | "vagaro" | "csv";
+
 export default function Dashboard() {
-  const { viewAsId, setViewAsId } = useViewAs();
   const [win, setWin] = useState(30);
 
-  const scope = viewAsId === "all" ? "all" : viewAsId;
-  const m = useMemo(() => metricsFor(scope, win), [scope, win]);
+  // Where the numbers come from — demo (default), Vagaro API, or a CSV upload
+  const [sourceMode, setSourceMode] = useState<SourceMode>("demo");
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [csvRows, setCsvRows] = useState<number | null>(null);
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const csvFileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    fetch("/api/dashboard/source").then(async r => {
+      if (!r.ok) return;
+      const data = (await r.json()) as { mode: SourceMode; fileName: string | null; rows: number | null };
+      setSourceMode(data.mode);
+      setCsvFileName(data.fileName);
+      setCsvRows(data.rows);
+    }).catch(() => {});
+  }, []);
+
+  async function setSource(mode: SourceMode, extra?: { fileName: string; rows: number }) {
+    setSourceBusy(true);
+    try {
+      const res = await fetch("/api/dashboard/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, ...extra }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setSourceMode(mode);
+      setCsvFileName(extra?.fileName ?? null);
+      setCsvRows(extra?.rows ?? null);
+    } catch {
+      /* keep previous state on failure */
+    } finally {
+      setSourceBusy(false);
+    }
+  }
+
+  function onCsvFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const lines = String(reader.result ?? "").split(/\r?\n/).filter(l => l.trim().length > 0);
+      const rows = Math.max(0, lines.length - 1); // minus header
+      setSource("csv", { fileName: file.name, rows });
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  const m = useMemo(() => metricsFor("all", win), [win]);
   const prev = useMemo(() => {
-    const cur = metricsFor(scope, win);
-    const prev = metricsFor(scope, win * 2);
+    const cur = metricsFor("all", win);
+    const prev = metricsFor("all", win * 2);
     return { gross: cur.gross - (prev.gross - cur.gross), netDelta: cur.net - (prev.net - cur.net) };
-  }, [scope, win]);
-  const series = useMemo(() => dailySeries(scope, win), [scope, win]);
+  }, [win]);
+  const series = useMemo(() => dailySeries("all", win), [win]);
   const rent = rentSummary();
 
-  // Per-stylist board (only in owner view)
+  // Per-stylist board — owner view of the whole room
   const leaderboard = useMemo(() => {
     return stylists
       .map(s => ({ s, m: metricsFor(s.id, win) }))
       .sort((a, b) => b.m.gross - a.m.gross);
   }, [win]);
 
-  // Service mix (top 5 by revenue, scope-aware)
+  // Service mix (top 5 by revenue, salon-wide)
   const mix = useMemo(() => {
     const map = new Map<string, number>();
     for (const b of bookings) {
-      if (scope !== "all" && b.stylistId !== scope) continue;
       if (b.daysAgo >= win) continue;
       map.set(b.service.name, (map.get(b.service.name) ?? 0) + b.price);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [scope, win]);
+  }, [win]);
   const mixMax = mix[0]?.[1] ?? 0;
 
-  const scopeLabel = viewAsId === "all" ? "All stylists" : findStylist(viewAsId)?.name ?? "All";
+  const scopeLabel = "All stylists";
 
   return (
     <div className="space-y-6">
@@ -84,6 +131,73 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span
+              className={[
+                "grid h-9 w-9 shrink-0 place-items-center rounded-xl text-cream",
+                sourceMode === "demo" ? "bg-moss-300" : "bg-moss-600",
+              ].join(" ")}
+            >
+              {sourceMode === "demo" ? "◌" : "●"}
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-semibold text-moss-700">Data source</span>
+                <Pill tone={sourceMode === "demo" ? "champagne" : "moss"}>
+                  {sourceMode === "demo" ? "Demo data" : sourceMode === "vagaro" ? "Live-ready · Vagaro" : "CSV import"}
+                </Pill>
+              </div>
+              <div className="text-[12px] text-muted">
+                {sourceMode === "vagaro"
+                  ? "Vagaro Transactions webhook streams Belinda's sales in real time. Flip env keys to go live."
+                  : sourceMode === "csv"
+                  ? <>Imported <b className="text-moss-700">{csvFileName}</b>{csvRows != null && <> · {csvRows.toLocaleString()} rows</>}. Re-upload anytime.</>
+                  : "Showing illustrative demo numbers. Connect Vagaro for live data, or upload a Vagaro CSV export."}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input ref={csvFileRef} type="file" accept=".csv,.txt" hidden onChange={onCsvFile} />
+            <button
+              onClick={() => setSource("vagaro")}
+              disabled={sourceBusy}
+              className={[
+                "rounded-lg px-3 py-1.5 text-[12px] font-medium transition disabled:opacity-60",
+                sourceMode === "vagaro"
+                  ? "bg-moss-700 text-cream"
+                  : "border border-moss-700/15 bg-white text-moss-700 hover:border-moss-500",
+              ].join(" ")}
+            >
+              {sourceMode === "vagaro" ? "Vagaro connected ✓" : "Connect Vagaro"}
+            </button>
+            <button
+              onClick={() => csvFileRef.current?.click()}
+              disabled={sourceBusy}
+              className={[
+                "rounded-lg px-3 py-1.5 text-[12px] font-medium transition disabled:opacity-60",
+                sourceMode === "csv"
+                  ? "bg-moss-700 text-cream"
+                  : "border border-moss-700/15 bg-white text-moss-700 hover:border-moss-500",
+              ].join(" ")}
+            >
+              {sourceMode === "csv" ? "Re-upload CSV" : "Upload CSV"}
+            </button>
+            {sourceMode !== "demo" && (
+              <button
+                onClick={() => setSource("demo")}
+                disabled={sourceBusy}
+                className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] text-muted transition hover:border-moss-500 hover:text-moss-700 disabled:opacity-60"
+              >
+                Back to demo
+              </button>
+            )}
+          </div>
+        </div>
+      </Card>
 
       <section className="grid gap-3 md:grid-cols-4">
         <Stat label="Gross" value={fmtUSD(m.gross)} delta={prev.gross} />
@@ -128,48 +242,24 @@ export default function Dashboard() {
         <Card>
           <CardHead
             eyebrow="Stylist leaderboard"
-            title={viewAsId === "all" ? "Who's bringing the room up" : "How you stack up"}
+            title="Who's bringing the room up"
           />
           <ul className="divide-y divide-moss-700/8">
-            {leaderboard.map(({ s, m: sm }, idx) => {
-              const isMe = s.id === viewAsId;
-              return (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => setViewAsId(isMe ? "all" : s.id)}
-                    className={[
-                      "flex w-full items-center gap-3 py-3 text-left transition rounded-xl px-2 -mx-2",
-                      isMe ? "bg-champagne-100/50" : "hover:bg-moss-100/30",
-                    ].join(" ")}
-                  >
-                    <span className="w-5 text-right text-[11px] tabular-nums text-muted">{idx + 1}</span>
-                    <Avatar initials={s.initials} hueDeg={s.hueDeg} size={32} />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <div className="truncate text-[14px] font-medium text-moss-700">{s.name}</div>
-                        {isMe && <Pill tone="champagne">viewing as</Pill>}
-                      </div>
-                      <div className="text-[12px] text-muted">{s.role} · {s.chair} · {sm.bookings} bookings</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-[14px] font-semibold text-moss-700">{fmtUSD(sm.gross)}</div>
-                      <div className="text-[11px] text-muted">{Math.round(sm.retention * 100)}% retention</div>
-                    </div>
-                  </button>
-                </li>
-              );
-            })}
+            {leaderboard.map(({ s, m: sm }, idx) => (
+              <li key={s.id} className="flex items-center gap-3 py-3">
+                <span className="w-5 text-right text-[11px] tabular-nums text-muted">{idx + 1}</span>
+                <Avatar initials={s.initials} hueDeg={s.hueDeg} size={32} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-moss-700">{s.name}</div>
+                  <div className="text-[12px] text-muted">{s.role} · {s.chair} · {sm.bookings} bookings</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[14px] font-semibold text-moss-700">{fmtUSD(sm.gross)}</div>
+                  <div className="text-[11px] text-muted">{Math.round(sm.retention * 100)}% retention</div>
+                </div>
+              </li>
+            ))}
           </ul>
-          {viewAsId !== "all" && (
-            <button
-              type="button"
-              onClick={() => setViewAsId("all")}
-              className="mt-3 text-[12px] font-medium text-moss-500 hover:text-moss-700"
-            >
-              ← back to all stylists
-            </button>
-          )}
         </Card>
 
         <div className="space-y-5">
