@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill, Illustrative } from "@/components/ui/Pill";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Avatar } from "@/components/ui/Avatar";
 import { draftCaption, PostType } from "@/lib/demo/captions";
 
@@ -291,24 +292,11 @@ export default function PostStudio() {
         </Card>
       </section>
 
-      <Card>
-        <CardHead eyebrow="History" title="Drafted today" />
-        <ul className="divide-y divide-moss-700/8">
-          {[
-            { who: "The Green Room", what: "Brand post · twelve stylists, one front door", status: "scheduled", time: "9:14 AM" },
-            { who: "The Green Room", what: "Brand post · neighborhood salon",               status: "draft",     time: "11:02 AM" },
-            { who: "Suite 5 open",   what: "Chair / Room open",                              status: "draft",     time: "4:18 PM" },
-          ].map((row, i) => (
-            <li key={i} className="flex items-center justify-between gap-3 py-3">
-              <div className="min-w-0">
-                <div className="truncate text-[14px] font-medium text-moss-700">{row.what}</div>
-                <div className="text-[12px] text-muted">{row.who} · {row.time}</div>
-              </div>
-              <Pill tone={row.status === "scheduled" ? "moss" : "champagne"}>{row.status}</Pill>
-            </li>
-          ))}
-        </ul>
-      </Card>
+      <EmptyState
+        eyebrow="History"
+        title="No posts yet"
+        description="Posts you approve and schedule will show up here."
+      />
     </div>
   );
 }
