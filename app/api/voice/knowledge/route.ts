@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
+import { getState, setState } from "@/lib/store";
 
 export const runtime = "nodejs";
 
-const STORE = path.join(process.cwd(), ".data", "knowledge-base.json");
 const MAX_CHARS = 200_000;
 
 type KnowledgeBase = {
@@ -15,18 +13,9 @@ type KnowledgeBase = {
 
 const EMPTY: KnowledgeBase = { text: "", fileName: null, updatedAt: null };
 
-async function ensureDir() {
-  await fs.mkdir(path.dirname(STORE), { recursive: true });
-}
-
 export async function GET() {
-  try {
-    const raw = await fs.readFile(STORE, "utf-8");
-    const data = JSON.parse(raw) as KnowledgeBase;
-    return NextResponse.json({ ...EMPTY, ...data, saved: true });
-  } catch {
-    return NextResponse.json({ ...EMPTY, saved: false });
-  }
+  const kb = await getState<KnowledgeBase>("knowledge-base");
+  return NextResponse.json({ ...EMPTY, ...(kb ?? {}), saved: kb != null });
 }
 
 export async function POST(req: NextRequest) {
@@ -40,11 +29,9 @@ export async function POST(req: NextRequest) {
   const record: KnowledgeBase = {
     text,
     fileName: body.fileName ?? null,
-    // Caller stamps time; server can't use Date in this harness reliably, so trust the client value if absent fall back to a marker.
     updatedAt: new Date().toISOString(),
   };
 
-  await ensureDir();
-  await fs.writeFile(STORE, JSON.stringify(record, null, 2), "utf-8");
+  await setState("knowledge-base", record);
   return NextResponse.json({ ok: true, ...record });
 }

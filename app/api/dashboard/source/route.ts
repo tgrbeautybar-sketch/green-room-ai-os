@@ -1,36 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
+import { getState, setState } from "@/lib/store";
 
 export const runtime = "nodejs";
-
-const STORE = path.join(process.cwd(), ".data", "dashboard-source.json");
 
 type SourceMode = "demo" | "vagaro" | "csv";
 
 type DataSource = {
   mode: SourceMode;
-  fileName: string | null; // for csv
-  rows: number | null; // for csv
+  fileName: string | null;
+  rows: number | null;
   connectedAt: string | null;
 };
 
 const DEFAULT: DataSource = { mode: "demo", fileName: null, rows: null, connectedAt: null };
-
 const MODES: SourceMode[] = ["demo", "vagaro", "csv"];
 
-async function ensureDir() {
-  await fs.mkdir(path.dirname(STORE), { recursive: true });
-}
-
 export async function GET() {
-  try {
-    const raw = await fs.readFile(STORE, "utf-8");
-    const data = JSON.parse(raw) as DataSource;
-    return NextResponse.json({ ...DEFAULT, ...data });
-  } catch {
-    return NextResponse.json(DEFAULT);
-  }
+  const s = await getState<DataSource>("dashboard-source");
+  return NextResponse.json({ ...DEFAULT, ...(s ?? {}) });
 }
 
 export async function POST(req: NextRequest) {
@@ -46,7 +33,6 @@ export async function POST(req: NextRequest) {
     connectedAt: body.mode === "demo" ? null : new Date().toISOString(),
   };
 
-  await ensureDir();
-  await fs.writeFile(STORE, JSON.stringify(record, null, 2), "utf-8");
+  await setState("dashboard-source", record);
   return NextResponse.json({ ok: true, ...record });
 }

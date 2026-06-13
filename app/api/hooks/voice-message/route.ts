@@ -1,34 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
 import { sendAlert } from "@/lib/email";
+import { addMessage, CapturedMessage } from "@/lib/store";
 
 export const runtime = "nodejs";
 
 // Called by the voice agent (Retell) when Sage takes a message or a booking request.
-// Public route (exempted from auth in proxy.ts) — secured with a shared secret instead,
-// since an external service can't carry the owner's session cookie.
-
-const STORE = path.join(process.cwd(), ".data", "messages.json");
-
-type CapturedMessage = {
-  id: string;
-  type: "message" | "booking";
-  callerName: string;
-  phone: string;
-  service: string;
-  preferredStylist: string;
-  note: string;
-  receivedAt: string;
-};
-
-async function readAll(): Promise<CapturedMessage[]> {
-  try {
-    return JSON.parse(await fs.readFile(STORE, "utf-8")) as CapturedMessage[];
-  } catch {
-    return [];
-  }
-}
+// Public route (exempted from auth in proxy.ts) — secured with a shared secret.
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.VOICE_WEBHOOK_SECRET;
@@ -55,11 +32,8 @@ export async function POST(req: NextRequest) {
     receivedAt: new Date().toISOString(),
   };
 
-  // 1) Persist so nothing is ever lost, regardless of email config.
-  await fs.mkdir(path.dirname(STORE), { recursive: true });
-  const all = await readAll();
-  all.unshift(msg);
-  await fs.writeFile(STORE, JSON.stringify(all.slice(0, 500), null, 2), "utf-8");
+  // 1) Persist so nothing is ever lost.
+  await addMessage(msg);
 
   // 2) Notify Belinda by email (no-ops to demo if not configured).
   const heading = msg.type === "booking" ? "New booking request" : "New message";
