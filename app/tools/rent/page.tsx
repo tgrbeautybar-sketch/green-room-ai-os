@@ -5,7 +5,12 @@ import { Card, CardHead } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
 
 type RentType = "chair" | "room";
-type RentEntry = { id: string; name: string; type: RentType; amount: number; status: "paid" | "unpaid"; note?: string };
+type RentEntry = { id: string; name: string; type: RentType; amount: number; status: "paid" | "unpaid"; note?: string; email?: string; phone?: string };
+
+function reminderText(e: RentEntry) {
+  const first = e.name.split(" ")[0] || e.name || "there";
+  return `Hi ${first}! Friendly reminder that your ${e.type} rent of ${new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(e.amount)} is due. Thank you so much! — Belinda`;
+}
 
 function fmtUSD(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
@@ -75,12 +80,16 @@ export default function RentRollPage() {
   }
 
   function copyReminder(e: RentEntry) {
-    const first = e.name.split(" ")[0] || e.name;
-    const text = `Hi ${first}! Friendly reminder that your ${e.type} rent of ${fmtUSD(e.amount)} is due. Thank you so much! — Belinda`;
-    navigator.clipboard?.writeText(text).then(() => {
+    navigator.clipboard?.writeText(reminderText(e)).then(() => {
       setCopied(e.id);
       setTimeout(() => setCopied(null), 1600);
     }).catch(() => {});
+  }
+
+  function mailtoHref(e: RentEntry) {
+    const subject = encodeURIComponent("Rent reminder — The Green Room");
+    const body = encodeURIComponent(reminderText(e));
+    return `mailto:${e.email ?? ""}?subject=${subject}&body=${body}`;
   }
 
   return (
@@ -177,70 +186,101 @@ export default function RentRollPage() {
             {entries.map(e => {
               const paid = e.status === "paid";
               return (
-                <li key={e.id} className="flex flex-wrap items-center gap-3 py-3">
-                  <button
-                    onClick={() => update(e.id, { status: paid ? "unpaid" : "paid" })}
-                    title={paid ? "Mark unpaid" : "Mark paid"}
-                    className={[
-                      "grid h-6 w-6 shrink-0 place-items-center rounded-md border text-[12px] transition",
-                      paid ? "border-moss-500 bg-moss-500 text-cream" : "border-moss-700/25 bg-white text-transparent hover:border-moss-400",
-                    ].join(" ")}
-                  >
-                    ✓
-                  </button>
+                <li key={e.id} className="py-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => update(e.id, { status: paid ? "unpaid" : "paid" })}
+                      title={paid ? "Mark unpaid" : "Mark paid"}
+                      className={[
+                        "grid h-6 w-6 shrink-0 place-items-center rounded-md border text-[12px] transition",
+                        paid ? "border-moss-500 bg-moss-500 text-cream" : "border-moss-700/25 bg-white text-transparent hover:border-moss-400",
+                      ].join(" ")}
+                    >
+                      ✓
+                    </button>
 
-                  <input
-                    value={e.name}
-                    onChange={ev => update(e.id, { name: ev.target.value })}
-                    className="min-w-[8rem] grow rounded-md border border-transparent bg-transparent px-1 py-1 text-[14px] font-medium text-moss-700 outline-none hover:border-moss-700/10 focus:border-moss-500 focus:bg-white"
-                  />
-
-                  <select
-                    value={e.type}
-                    onChange={ev => update(e.id, { type: ev.target.value as RentType })}
-                    className="rounded-md border border-moss-700/15 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
-                  >
-                    <option value="chair">chair</option>
-                    <option value="room">room</option>
-                  </select>
-
-                  <div className="flex items-center gap-1 text-[14px] text-moss-700">
-                    <span className="text-muted">$</span>
                     <input
-                      type="number"
-                      value={e.amount}
-                      onChange={ev => update(e.id, { amount: parseInt(ev.target.value) || 0 })}
-                      className="w-20 rounded-md border border-moss-700/15 bg-white px-2 py-1 text-right text-[14px] font-semibold outline-none focus:border-moss-500"
+                      value={e.name}
+                      onChange={ev => update(e.id, { name: ev.target.value })}
+                      className="min-w-[8rem] grow rounded-md border border-transparent bg-transparent px-1 py-1 text-[14px] font-medium text-moss-700 outline-none hover:border-moss-700/10 focus:border-moss-500 focus:bg-white"
+                    />
+
+                    <select
+                      value={e.type}
+                      onChange={ev => update(e.id, { type: ev.target.value as RentType })}
+                      className="rounded-md border border-moss-700/15 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
+                    >
+                      <option value="chair">chair</option>
+                      <option value="room">room</option>
+                    </select>
+
+                    <div className="flex items-center gap-1 text-[14px] text-moss-700">
+                      <span className="text-muted">$</span>
+                      <input
+                        type="number"
+                        value={e.amount}
+                        onChange={ev => update(e.id, { amount: parseInt(ev.target.value) || 0 })}
+                        className="w-20 rounded-md border border-moss-700/15 bg-white px-2 py-1 text-right text-[14px] font-semibold outline-none focus:border-moss-500"
+                      />
+                    </div>
+
+                    <Pill tone={paid ? "moss" : "neutral"}>{paid ? "paid" : "unpaid"}</Pill>
+
+                    <button
+                      onClick={() => remove(e.id)}
+                      title="Remove"
+                      className="ml-auto rounded-md border border-transparent px-2 py-1 text-[14px] text-muted transition hover:border-[#c8857a]/40 hover:text-[#9a4a32]"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-2 pl-9">
+                    <input
+                      value={e.email ?? ""}
+                      onChange={ev => update(e.id, { email: ev.target.value })}
+                      placeholder="email — for reminders"
+                      className="min-w-[12rem] grow rounded-md border border-moss-700/12 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
+                    />
+                    <input
+                      value={e.phone ?? ""}
+                      onChange={ev => update(e.id, { phone: ev.target.value })}
+                      placeholder="phone — for texts"
+                      className="w-40 rounded-md border border-moss-700/12 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
                     />
                   </div>
 
-                  <Pill tone={paid ? "moss" : "neutral"}>{paid ? "paid" : "unpaid"}</Pill>
-
                   {!paid && (
-                    <button
-                      onClick={() => copyReminder(e)}
-                      className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] text-moss-700 transition hover:border-moss-500"
-                    >
-                      {copied === e.id ? "Copied ✓" : "Copy reminder"}
-                    </button>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 pl-9">
+                      {e.email ? (
+                        <a
+                          href={mailtoHref(e)}
+                          className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500"
+                        >
+                          ✉ Email reminder
+                        </a>
+                      ) : (
+                        <span className="text-[12px] text-muted">Add an email above to send a reminder</span>
+                      )}
+                      <button
+                        onClick={() => copyReminder(e)}
+                        className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] text-moss-700 transition hover:border-moss-500"
+                      >
+                        {copied === e.id ? "Copied ✓" : "Copy text"}
+                      </button>
+                    </div>
                   )}
 
-                  <button
-                    onClick={() => remove(e.id)}
-                    title="Remove"
-                    className="ml-auto rounded-md border border-transparent px-2 py-1 text-[14px] text-muted transition hover:border-[#c8857a]/40 hover:text-[#9a4a32]"
-                  >
-                    ✕
-                  </button>
-
-                  {e.note && <div className="w-full pl-9 text-[12px] text-champagne-600">{e.note}</div>}
+                  {e.note && <div className="mt-1 pl-9 text-[12px] text-champagne-600">{e.note}</div>}
                 </li>
               );
             })}
           </ul>
         )}
         <p className="mt-3 text-[11px] text-muted">
-          "Copy reminder" copies a friendly text you can send from your phone. Remember to Save changes after editing.
+          Add each renter's email/phone to send reminders. <b className="text-moss-700">Email reminder</b> opens your
+          email pre-filled to send; <b className="text-moss-700">Copy text</b> copies a message for your phone.
+          Remember to <b className="text-moss-700">Save changes</b> after editing.
         </p>
       </Card>
     </div>

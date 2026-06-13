@@ -14,6 +14,8 @@ type RentEntry = {
   amount: number;
   status: "paid" | "unpaid";
   note?: string;
+  email?: string;
+  phone?: string;
 };
 type Roster = { entries: RentEntry[] };
 
@@ -37,6 +39,8 @@ export async function POST(req: NextRequest) {
     amount: Number.isFinite(e.amount) ? Math.max(0, Math.round(e.amount)) : 0,
     status: e.status === "paid" ? "paid" : "unpaid",
     note: e.note ? String(e.note).slice(0, 200) : undefined,
+    email: e.email ? String(e.email).slice(0, 200) : undefined,
+    phone: e.phone ? String(e.phone).slice(0, 40) : undefined,
   }));
 
   await setState("rent-roster", { entries });
