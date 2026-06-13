@@ -19,7 +19,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const body = (await req.json().catch(() => ({}))) as Partial<CapturedMessage> & { type?: string };
+  // Retell custom functions POST { call, name, args:{...} }; other callers may send fields at top level.
+  const raw = (await req.json().catch(() => ({}))) as { args?: Record<string, unknown> } & Record<string, unknown>;
+  const body = (raw.args ?? raw) as Partial<CapturedMessage> & { type?: string };
 
   const msg: CapturedMessage = {
     id: `msg_${Date.now()}`,
