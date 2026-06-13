@@ -5,7 +5,8 @@ The app persists state to **Supabase** when configured, and falls back to local 
 ## 1. Create a Supabase project
 At supabase.com → New project. Grab from Project Settings → API:
 - **Project URL** → `SUPABASE_URL`
-- **service_role key** (secret, server-only) → `SUPABASE_SERVICE_ROLE_KEY`
+- **Secret key** (new format `sb_secret_...`, under "API keys → Secret keys"; or the legacy service_role key) → `SUPABASE_SECRET_KEY`. Server-only, never in the browser.
+- Do NOT use the **publishable** key (`sb_publishable_...`) — that's the public/anon-equivalent; our code doesn't use it.
 
 ## 2. Run this SQL (Supabase → SQL Editor)
 ```sql
@@ -28,6 +29,11 @@ create table if not exists messages (
   received_at       timestamptz not null default now()
 );
 create index if not exists messages_received_at_idx on messages (received_at desc);
+
+-- Lock both tables: with RLS on and no policies, only the SECRET key (which
+-- bypasses RLS) can touch them. The publishable/public key gets zero access.
+alter table app_state enable row level security;
+alter table messages  enable row level security;
 ```
 (We use the service_role key server-side only, so row-level security policies aren't required for these tables. Keep that key secret — never ship it to the browser.)
 
@@ -45,7 +51,7 @@ SESSION_SECRET=...               # any long random string
 
 # Supabase (database + image storage)
 SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...
+SUPABASE_SECRET_KEY=...              # the sb_secret_... key (NOT sb_publishable_...)
 SUPABASE_BUCKET=post-media
 
 # Social publishing (Zernio)
