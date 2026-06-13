@@ -252,22 +252,26 @@ export default function RentRollPage() {
 
                   {!paid && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 pl-9">
-                      {e.email ? (
+                      {e.phone && (
+                        <button
+                          onClick={() => copyReminder(e)}
+                          title="Sends automatically via Retell once A2P texting is approved; copies the text for now"
+                          className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500"
+                        >
+                          {copied === e.id ? "Text copied ✓" : "📱 Text reminder"}
+                        </button>
+                      )}
+                      {e.email && (
                         <a
                           href={mailtoHref(e)}
                           className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500"
                         >
                           ✉ Email reminder
                         </a>
-                      ) : (
-                        <span className="text-[12px] text-muted">Add an email above to send a reminder</span>
                       )}
-                      <button
-                        onClick={() => copyReminder(e)}
-                        className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] text-moss-700 transition hover:border-moss-500"
-                      >
-                        {copied === e.id ? "Copied ✓" : "Copy text"}
-                      </button>
+                      {!e.phone && !e.email && (
+                        <span className="text-[12px] text-muted">Add an email or phone above to send a reminder</span>
+                      )}
                     </div>
                   )}
 
@@ -278,8 +282,9 @@ export default function RentRollPage() {
           </ul>
         )}
         <p className="mt-3 text-[11px] text-muted">
-          Add each renter's email/phone to send reminders. <b className="text-moss-700">Email reminder</b> opens your
-          email pre-filled to send; <b className="text-moss-700">Copy text</b> copies a message for your phone.
+          Add a <b className="text-moss-700">phone</b> for a text reminder, or an <b className="text-moss-700">email</b> for an email reminder.
+          <b className="text-moss-700"> Email reminder</b> opens your email pre-filled to send now.
+          <b className="text-moss-700"> Text reminder</b> will send automatically via Retell once SMS (A2P) is approved — for now it copies the text.
           Remember to <b className="text-moss-700">Save changes</b> after editing.
         </p>
       </Card>
