@@ -50,8 +50,13 @@ export async function generateCaption(args: {
   stylistHandle?: string;
   stylistChair?: string;
   variation: number; // small int — nudges variance across re-drafts
+  brandNotes?: string; // owner-editable brand voice / salon context
 }): Promise<DraftedCaption | null> {
   if (!client) return null;
+
+  const system = args.brandNotes && args.brandNotes.trim().length > 0
+    ? `${GREEN_ROOM_VOICE}\n\nSALON-SPECIFIC NOTES (from the owner — weave these in naturally, follow them over generic phrasing):\n${args.brandNotes.trim()}`
+    : GREEN_ROOM_VOICE;
 
   const stylistLine =
     args.type === "spotlight" && args.stylistName
@@ -75,7 +80,7 @@ Return ONLY valid JSON with this exact shape, no prose, no markdown fence:
     max_tokens: 1024,
     thinking: { type: "adaptive" },
     output_config: { effort: "low" },
-    system: GREEN_ROOM_VOICE,
+    system,
     messages: [{ role: "user", content: userPrompt }],
   });
 

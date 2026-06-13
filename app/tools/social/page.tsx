@@ -27,6 +27,14 @@ export default function PostStudio() {
   const [uploads, setUploads] = useState<string[]>([]); // data URLs
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // Editable caption (you can tweak the AI draft before posting)
+  const [editedCaption, setEditedCaption] = useState("");
+
+  // Brand voice — feeds AI caption generation; persisted to Supabase
+  const [brand, setBrand] = useState("");
+  const [brandBaseline, setBrandBaseline] = useState("");
+  const [brandSaveState, setBrandSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
   // Demo-mode initial draft (instant). Replaced by API call on Re-draft.
   const fallbackDraft = useMemo(() => draftCaption(type, undefined, seed), [type, seed]);
   const [draft, setDraft] = useState<Draft>({ ...fallbackDraft, mode: "demo" });
@@ -37,6 +45,19 @@ export default function PostStudio() {
     setDraft({ ...fallbackDraft, mode: "demo" });
     setScheduled(false);
   }, [type]);
+
+  // Keep the editable caption in sync with the latest draft
+  useEffect(() => { setEditedCaption(draft.caption); }, [draft]);
+
+  // Load the saved brand voice
+  useEffect(() => {
+    fetch("/api/social/brand").then(async r => {
+      if (!r.ok) return;
+      const d = (await r.json()) as { text: string };
+      setBrand(d.text ?? "");
+      setBrandBaseline(d.text ?? "");
+    }).catch(() => {});
+  }, []);
 
   const carousel = useMemo(() => {
     if (uploads.length > 0) return uploads.slice(0, 3);
@@ -86,7 +107,7 @@ export default function PostStudio() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: draft.caption,
+          content: editedCaption,
           hashtags: draft.hashtags,
           igOn,
           fbOn,
@@ -105,6 +126,24 @@ export default function PostStudio() {
     }
   }
 
+  async function saveBrand() {
+    setBrandSaveState("saving");
+    try {
+      const res = await fetch("/api/social/brand", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: brand }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setBrandBaseline(brand);
+      setBrandSaveState("saved");
+      setTimeout(() => setBrandSaveState("idle"), 1800);
+    } catch {
+      setBrandSaveState("error");
+      setTimeout(() => setBrandSaveState("idle"), 2400);
+    }
+  }
+
   function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []).slice(0, 3);
     if (files.length === 0) return;
@@ -120,6 +159,8 @@ export default function PostStudio() {
       )
     ).then(setUploads);
   }
+
+  const brandDirty = brand !== brandBaseline;
 
   return (
     <div className="space-y-6">
@@ -156,6 +197,45 @@ export default function PostStudio() {
           </button>
         ))}
       </section>
+
+      <Card>
+        <CardHead
+          eyebrow="Brand voice"
+          title="What the AI should know about your salon"
+          action={
+            <div className="flex items-center gap-2">
+              {brandDirty && (
+                <button
+                  onClick={() => setBrand(brandBaseline)}
+                  className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] text-moss-700 hover:border-moss-500"
+                >
+                  Revert
+                </button>
+              )}
+              <button
+                onClick={saveBrand}
+                disabled={!brandDirty || brandSaveState === "saving"}
+                className="rounded-lg bg-moss-700 px-3 py-1.5 text-[12px] text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
+              >
+                {brandSaveState === "saving" ? "Saving…"
+                  : brandSaveState === "saved" ? "Saved ✓"
+                  : brandSaveState === "error" ? "Retry"
+                  : brandDirty ? "Save" : "Saved ✓"}
+              </button>
+            </div>
+          }
+        />
+        <p className="mb-2 text-[12px] text-muted">
+          Tone, things to mention, words to use or avoid — the agent weaves this into every caption it drafts.
+        </p>
+        <textarea
+          value={brand}
+          onChange={e => setBrand(e.target.value)}
+          rows={4}
+          placeholder="e.g. Warm but not cheesy. We're a collective of independent stylists. Always point people to book at tgrbeautybar.com. Never use 'pamper yourself' or exclamation spam."
+          className="w-full resize-none rounded-xl border border-moss-700/10 bg-cream/60 p-4 text-[13px] leading-relaxed text-moss-800 outline-none transition placeholder:text-muted/70 focus:border-moss-500"
+        />
+      </Card>
 
       <section className="grid gap-5 lg:grid-cols-[1.05fr_1fr]">
         <Card>
@@ -252,12 +332,23 @@ export default function PostStudio() {
             </div>
 
             <div className="mt-3 whitespace-pre-wrap text-[14px] leading-relaxed text-ink">
-              {drafting ? "Sage is drafting in the Green Room voice…" : draft.caption}
+              {drafting ? "Sage is drafting in the Green Room voice…" : editedCaption}
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5">
               {draft.hashtags.map(h => <span key={h} className="text-[12px] text-moss-500">{h}</span>)}
             </div>
             <div className="mt-2 text-[12px] font-medium text-champagne-600">CTA · {draft.cta}</div>
+          </div>
+
+          <div className="mt-4">
+            <label className="block text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Caption — edit before posting</label>
+            <textarea
+              value={editedCaption}
+              onChange={e => setEditedCaption(e.target.value)}
+              disabled={drafting}
+              rows={5}
+              className="mt-1 w-full resize-none rounded-xl border border-moss-700/10 bg-cream/60 p-3 text-[13px] leading-relaxed text-moss-800 outline-none transition focus:border-moss-500"
+            />
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
