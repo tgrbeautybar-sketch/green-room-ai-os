@@ -65,6 +65,22 @@ export default function PostStudio() {
   async function schedule() {
     setScheduling(true);
     try {
+      // Instagram needs public image URLs — host any uploaded images first.
+      const mediaUrls: string[] = uploads.filter(u => /^https?:\/\//.test(u));
+      for (const dataUrl of uploads.filter(u => u.startsWith("data:"))) {
+        try {
+          const up = await fetch("/api/social/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dataUrl }),
+          });
+          if (up.ok) {
+            const { url } = (await up.json()) as { url: string };
+            if (url) mediaUrls.push(url);
+          }
+        } catch { /* skip an image that fails to host */ }
+      }
+
       const res = await fetch("/api/social/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -73,8 +89,7 @@ export default function PostStudio() {
           hashtags: draft.hashtags,
           igOn,
           fbOn,
-          // only real hosted URLs are usable live; uploaded previews are data: URLs
-          mediaUrls: uploads.filter(u => /^https?:\/\//.test(u)),
+          mediaUrls,
         }),
       });
       const data = (await res.json()) as { mode?: "live" | "demo" };
