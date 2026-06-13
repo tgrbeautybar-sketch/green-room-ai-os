@@ -23,7 +23,6 @@ export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
   const [baseline, setBaseline] = useState("[]");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [copied, setCopied] = useState<string | null>(null);
 
   // Add form
   const [addName, setAddName] = useState("");
@@ -79,17 +78,16 @@ export default function RentRollPage() {
     }
   }
 
-  function copyReminder(e: RentEntry) {
-    navigator.clipboard?.writeText(reminderText(e)).then(() => {
-      setCopied(e.id);
-      setTimeout(() => setCopied(null), 1600);
-    }).catch(() => {});
-  }
-
   function mailtoHref(e: RentEntry) {
     const subject = encodeURIComponent("Rent reminder — The Green Room");
     const body = encodeURIComponent(reminderText(e));
     return `mailto:${e.email ?? ""}?subject=${subject}&body=${body}`;
+  }
+
+  // Opens the phone's Messages app pre-filled — Belinda sends it herself (no A2P needed).
+  function smsHref(e: RentEntry) {
+    const phone = (e.phone ?? "").replace(/[^\d+]/g, "");
+    return `sms:${phone}?&body=${encodeURIComponent(reminderText(e))}`;
   }
 
   return (
@@ -253,13 +251,12 @@ export default function RentRollPage() {
                   {!paid && (
                     <div className="mt-2 flex flex-wrap items-center gap-2 pl-9">
                       {e.phone && (
-                        <button
-                          onClick={() => copyReminder(e)}
-                          title="Sends automatically via Retell once A2P texting is approved; copies the text for now"
+                        <a
+                          href={smsHref(e)}
                           className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500"
                         >
-                          {copied === e.id ? "Text copied ✓" : "📱 Text reminder"}
-                        </button>
+                          📱 Text reminder
+                        </a>
                       )}
                       {e.email && (
                         <a
@@ -283,8 +280,7 @@ export default function RentRollPage() {
         )}
         <p className="mt-3 text-[11px] text-muted">
           Add a <b className="text-moss-700">phone</b> for a text reminder, or an <b className="text-moss-700">email</b> for an email reminder.
-          <b className="text-moss-700"> Email reminder</b> opens your email pre-filled to send now.
-          <b className="text-moss-700"> Text reminder</b> will send automatically via Retell once SMS (A2P) is approved — for now it copies the text.
+          Both open pre-filled on your phone — <b className="text-moss-700">Text reminder</b> opens Messages, <b className="text-moss-700">Email reminder</b> opens your email — you just hit send. No setup needed.
           Remember to <b className="text-moss-700">Save changes</b> after editing.
         </p>
       </Card>
