@@ -1,63 +1,72 @@
 import "server-only";
+import nodemailer from "nodemailer";
 
-// Email alerts via Resend (https://resend.com). Env-gated: with no key, we no-op
-// to "demo" so the rest of the flow still works. This is the SIMPLE model —
-// notify Belinda at her inbox. (Not "send as her" — that's a separate feature.)
+// Email sending. Preference order:
+//   1. Gmail SMTP (sends FROM Belinda's own Gmail, to anyone — needs an App Password)
+//   2. Resend (needs a verified domain to reach arbitrary recipients)
+//   3. demo no-op
+// All env-gated so the app works with none configured.
 
-const apiKey = process.env.RESEND_API_KEY;
-const FROM = process.env.EMAIL_FROM || "The Green Room · Sage <onboarding@resend.dev>";
-const ALERT_TO = process.env.ALERT_EMAIL; // Belinda's inbox
+const GMAIL_USER = process.env.GMAIL_USER;
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, "");
+const gmailEnabled = !!GMAIL_USER && !!GMAIL_APP_PASSWORD;
 
-export const emailEnabled = !!apiKey && !!ALERT_TO;
-export const emailSendEnabled = !!apiKey;
+const resendKey = process.env.RESEND_API_KEY;
+const RESEND_FROM = process.env.EMAIL_FROM || "The Green Room · Sage <onboarding@resend.dev>";
+const ALERT_TO = process.env.ALERT_EMAIL; // where Sage's message alerts go
 
-export type SendResult = { mode: "live" | "demo"; reason?: string; id?: string };
+export const emailSendEnabled = gmailEnabled || !!resendKey;
+export const emailEnabled = emailSendEnabled && !!ALERT_TO;
 
-// Generic send to ANY recipient (e.g. a stylist). Requires a verified domain in
-// Resend to deliver to addresses other than the account owner's.
-export async function sendEmail(args: { to: string; subject: string; text: string }): Promise<SendResult> {
-  if (!apiKey) return { mode: "demo", reason: "RESEND_API_KEY not set" };
-  if (!args.to) return { mode: "demo", reason: "no recipient email" };
+export type SendResult = { mode: "live" | "demo"; via?: "gmail" | "resend"; reason?: string; id?: string };
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ from: FROM, to: [args.to], subject: args.subject, text: args.text }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Resend send failed (${res.status}): ${t.slice(0, 300)}`);
+let gmailTransport: nodemailer.Transporter | null = null;
+function transport() {
+  if (!gmailEnabled) return null;
+  if (!gmailTransport) {
+    gmailTransport = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: GMAIL_USER!, pass: GMAIL_APP_PASSWORD! },
+    });
   }
-  const data = (await res.json().catch(() => ({}))) as { id?: string };
-  return { mode: "live", id: data.id };
+  return gmailTransport;
 }
 
-export async function sendAlert(args: {
-  subject: string;
-  text: string;
-  html?: string;
-}): Promise<SendResult> {
-  if (!apiKey || !ALERT_TO) {
-    return { mode: "demo", reason: !apiKey ? "RESEND_API_KEY not set" : "ALERT_EMAIL not set" };
-  }
+// Send to ANY recipient (e.g. a stylist). Gmail SMTP can reach anyone; Resend needs a verified domain.
+export async function sendEmail(args: { to: string; subject: string; text: string }): Promise<SendResult> {
+  if (!args.to) return { mode: "demo", reason: "no recipient email" };
 
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      from: FROM,
-      to: [ALERT_TO],
+  const t = transport();
+  if (t) {
+    await t.sendMail({
+      from: `The Green Room Beauty Bar <${GMAIL_USER}>`,
+      to: args.to,
       subject: args.subject,
       text: args.text,
-      ...(args.html ? { html: args.html } : {}),
-    }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Resend send failed (${res.status}): ${t.slice(0, 300)}`);
+    });
+    return { mode: "live", via: "gmail" };
   }
-  const data = (await res.json().catch(() => ({}))) as { id?: string };
-  return { mode: "live", id: data.id };
+
+  if (resendKey) {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${resendKey}` },
+      body: JSON.stringify({ from: RESEND_FROM, to: [args.to], subject: args.subject, text: args.text }),
+    });
+    if (!res.ok) {
+      const tx = await res.text().catch(() => "");
+      throw new Error(`Resend send failed (${res.status}): ${tx.slice(0, 300)}`);
+    }
+    const data = (await res.json().catch(() => ({}))) as { id?: string };
+    return { mode: "live", via: "resend", id: data.id };
+  }
+
+  return { mode: "demo", reason: "no email sender configured" };
+}
+
+// Notify Belinda at her inbox (Sage took a message).
+export async function sendAlert(args: { subject: string; text: string }): Promise<SendResult> {
+  const to = ALERT_TO || GMAIL_USER; // default alerts to the connected Gmail if no separate ALERT_EMAIL
+  if (!to) return { mode: "demo", reason: "no alert recipient (set ALERT_EMAIL)" };
+  return sendEmail({ to, subject: args.subject, text: args.text });
 }

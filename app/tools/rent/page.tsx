@@ -23,6 +23,7 @@ export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
   const [baseline, setBaseline] = useState("[]");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [emailStatus, setEmailStatus] = useState<Record<string, "idle" | "sending" | "sent" | "error">>({});
 
   // Add form
   const [addName, setAddName] = useState("");
@@ -88,6 +89,24 @@ export default function RentRollPage() {
   function smsHref(e: RentEntry) {
     const phone = (e.phone ?? "").replace(/[^\d+]/g, "");
     return `sms:${phone}?&body=${encodeURIComponent(reminderText(e))}`;
+  }
+
+  // System sends the reminder from Belinda's Gmail (verified working).
+  async function sendEmailReminder(e: RentEntry) {
+    if (!e.email) return;
+    setEmailStatus(s => ({ ...s, [e.id]: "sending" }));
+    try {
+      const res = await fetch("/api/rent/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: e.email, name: e.name, type: e.type, amount: e.amount }),
+      });
+      const d = (await res.json()) as { mode?: string };
+      setEmailStatus(s => ({ ...s, [e.id]: res.ok && d.mode === "live" ? "sent" : "error" }));
+    } catch {
+      setEmailStatus(s => ({ ...s, [e.id]: "error" }));
+    }
+    setTimeout(() => setEmailStatus(s => ({ ...s, [e.id]: "idle" })), 3500);
   }
 
   return (
@@ -259,12 +278,21 @@ export default function RentRollPage() {
                         </a>
                       )}
                       {e.email && (
-                        <a
-                          href={mailtoHref(e)}
-                          className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500"
-                        >
-                          ✉ Email reminder
-                        </a>
+                        <>
+                          <button
+                            onClick={() => sendEmailReminder(e)}
+                            disabled={emailStatus[e.id] === "sending"}
+                            className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-60"
+                          >
+                            {emailStatus[e.id] === "sending" ? "Sending…"
+                              : emailStatus[e.id] === "sent" ? "Sent ✓"
+                              : emailStatus[e.id] === "error" ? "Failed — try again"
+                              : "✉ Email reminder"}
+                          </button>
+                          <a href={mailtoHref(e)} className="text-[12px] text-moss-500 underline hover:text-moss-700">
+                            or open in my email
+                          </a>
+                        </>
                       )}
                       {!e.phone && !e.email && (
                         <span className="text-[12px] text-muted">Add an email or phone above to send a reminder</span>
@@ -280,8 +308,8 @@ export default function RentRollPage() {
         )}
         <p className="mt-3 text-[11px] text-muted">
           Add a <b className="text-moss-700">phone</b> for a text reminder, or an <b className="text-moss-700">email</b> for an email reminder.
-          <b className="text-moss-700"> Text reminder</b> opens Messages and <b className="text-moss-700">Email reminder</b> opens your email (e.g. Gmail), both pre-filled —
-          you just hit send, so it comes from you. Remember to <b className="text-moss-700">Save changes</b> after editing.
+          <b className="text-moss-700"> Text reminder</b> opens Messages on your phone to send. <b className="text-moss-700">Email reminder</b> sends automatically from your Gmail in one click.
+          Remember to <b className="text-moss-700">Save changes</b> after editing.
         </p>
       </Card>
     </div>
