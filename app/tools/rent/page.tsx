@@ -19,11 +19,21 @@ function newId() {
   return `r_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 }
 
+type VenmoMatch = {
+  payment: { payer: string; amount: number; date: string };
+  matchId: string | null;
+  matchName: string | null;
+  alreadyPaid: boolean;
+};
+type CheckResult = { enabled: boolean; error?: string; matches: VenmoMatch[] };
+
 export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
   const [baseline, setBaseline] = useState("[]");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [emailStatus, setEmailStatus] = useState<Record<string, "idle" | "sending" | "sent" | "error">>({});
+  const [checking, setChecking] = useState(false);
+  const [check, setCheck] = useState<CheckResult | null>(null);
 
   // Add form
   const [addName, setAddName] = useState("");
@@ -79,6 +89,19 @@ export default function RentRollPage() {
     }
   }
 
+  async function checkPayments() {
+    setChecking(true);
+    try {
+      const res = await fetch("/api/rent/check-payments");
+      const d = (await res.json()) as CheckResult;
+      setCheck(d);
+    } catch {
+      setCheck({ enabled: true, error: "Couldn't check payments — try again.", matches: [] });
+    } finally {
+      setChecking(false);
+    }
+  }
+
   function mailtoHref(e: RentEntry) {
     const subject = encodeURIComponent("Rent reminder — The Green Room");
     const body = encodeURIComponent(reminderText(e));
@@ -121,6 +144,13 @@ export default function RentRollPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={checkPayments}
+            disabled={checking}
+            className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-60"
+          >
+            {checking ? "Checking…" : "↻ Check Venmo payments"}
+          </button>
           {dirty && (
             <button
               onClick={() => { try { setEntries(JSON.parse(baseline)); } catch { /* noop */ } }}
@@ -141,6 +171,66 @@ export default function RentRollPage() {
           </button>
         </div>
       </header>
+
+      {check && (
+        <Card>
+          <CardHead
+            eyebrow="Venmo check"
+            title="Detected payments"
+            action={
+              <button
+                onClick={() => setCheck(null)}
+                className="rounded-md border border-moss-700/15 bg-white px-2.5 py-1 text-[12px] text-muted hover:border-moss-500"
+              >
+                Dismiss
+              </button>
+            }
+          />
+          {!check.enabled ? (
+            <p className="text-[13px] text-muted">Connect Belinda's Gmail to detect Venmo payments.</p>
+          ) : check.error ? (
+            <p className="text-[13px] text-[#9a4a32]">{check.error}</p>
+          ) : check.matches.length === 0 ? (
+            <p className="text-[13px] text-muted">No Venmo payments found in the last 45 days.</p>
+          ) : (
+            <ul className="divide-y divide-moss-700/8">
+              {check.matches.map((m, i) => {
+                const live = m.matchId ? entries.find(e => e.id === m.matchId) : null;
+                const isPaidNow = live?.status === "paid";
+                return (
+                  <li key={i} className="flex flex-wrap items-center gap-2 py-2 text-[13px]">
+                    <span className="font-medium text-moss-700">{m.payment.payer}</span>
+                    <span className="text-muted">
+                      paid {fmtUSD(m.payment.amount)}
+                      {m.payment.date ? ` · ${new Date(m.payment.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
+                    </span>
+                    {m.matchName ? (
+                      isPaidNow ? (
+                        <Pill tone="moss">{m.matchName} · paid ✓</Pill>
+                      ) : (
+                        <>
+                          <span className="text-muted">→ {m.matchName}</span>
+                          <button
+                            onClick={() => m.matchId && update(m.matchId, { status: "paid" })}
+                            className="rounded-md bg-moss-700 px-2.5 py-1 text-[12px] font-medium text-cream hover:bg-moss-600"
+                          >
+                            Mark paid ✓
+                          </button>
+                        </>
+                      )
+                    ) : (
+                      <Pill tone="neutral">no matching unpaid renter</Pill>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          <p className="mt-2 text-[11px] text-muted">
+            Reads Venmo notification emails from the connected Gmail (last 45 days). After marking paid, hit <b className="text-moss-700">Save changes</b>.
+          </p>
+        </Card>
+      )}
 
       <section className="grid gap-3 sm:grid-cols-4">
         <Stat label="Expected" value={fmtUSD(expected)} sub={`${entries.length} renters`} />
