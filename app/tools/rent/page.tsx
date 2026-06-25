@@ -30,6 +30,7 @@ type CheckResult = { enabled: boolean; error?: string; matches: VenmoMatch[] };
 export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
   const [baseline, setBaseline] = useState("[]");
+  const [loaded, setLoaded] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [emailStatus, setEmailStatus] = useState<Record<string, "idle" | "sending" | "sent" | "error">>({});
   const [checking, setChecking] = useState(false);
@@ -47,8 +48,17 @@ export default function RentRollPage() {
       const es = Array.isArray(d.entries) ? d.entries : [];
       setEntries(es);
       setBaseline(JSON.stringify(es));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setLoaded(true));
   }, []);
+
+  // Auto-save: persist a moment after you stop editing (no Save button needed).
+  useEffect(() => {
+    if (!loaded) return;
+    if (JSON.stringify(entries) === baseline) return;
+    const t = setTimeout(() => { save(); }, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, loaded, baseline]);
 
   const dirty = JSON.stringify(entries) !== baseline;
   const expected = entries.reduce((a, e) => a + e.amount, 0);
@@ -70,6 +80,8 @@ export default function RentRollPage() {
   }
 
   async function save() {
+    // Snapshot what we send; don't overwrite local state on return (avoids clobbering in-flight edits during auto-save).
+    const snapshot = JSON.stringify(entries);
     setSaveState("saving");
     try {
       const res = await fetch("/api/rent/roster", {
@@ -78,11 +90,9 @@ export default function RentRollPage() {
         body: JSON.stringify({ entries }),
       });
       if (!res.ok) throw new Error(await res.text());
-      const d = (await res.json()) as { entries: RentEntry[] };
-      setEntries(d.entries);
-      setBaseline(JSON.stringify(d.entries));
+      setBaseline(snapshot);
       setSaveState("saved");
-      setTimeout(() => setSaveState("idle"), 1800);
+      setTimeout(() => setSaveState("idle"), 1500);
     } catch {
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 2400);
@@ -159,16 +169,18 @@ export default function RentRollPage() {
               Discard
             </button>
           )}
-          <button
-            onClick={save}
-            disabled={!dirty || saveState === "saving"}
-            className="rounded-lg bg-moss-700 px-4 py-1.5 text-[12px] font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
-          >
-            {saveState === "saving" ? "Saving…"
-              : saveState === "saved" ? "Saved ✓"
-              : saveState === "error" ? "Retry"
-              : dirty ? "Save changes" : "Saved ✓"}
-          </button>
+          {saveState === "error" ? (
+            <button
+              onClick={save}
+              className="rounded-lg bg-[#9a4a32] px-4 py-1.5 text-[12px] font-medium text-cream shadow-sm hover:opacity-90"
+            >
+              Save failed — retry
+            </button>
+          ) : (
+            <span className="rounded-lg border border-moss-700/10 bg-white px-3 py-1.5 text-[12px] text-muted">
+              {saveState === "saving" || dirty ? "Saving…" : "All changes saved ✓"}
+            </span>
+          )}
         </div>
       </header>
 
@@ -227,7 +239,7 @@ export default function RentRollPage() {
             </ul>
           )}
           <p className="mt-2 text-[11px] text-muted">
-            Reads Venmo notification emails from the connected Gmail (last 45 days). After marking paid, hit <b className="text-moss-700">Save changes</b>.
+            Reads Venmo notification emails from the connected Gmail (last 45 days). Marking paid saves automatically.
           </p>
         </Card>
       )}
@@ -399,7 +411,7 @@ export default function RentRollPage() {
         <p className="mt-3 text-[11px] text-muted">
           Add a <b className="text-moss-700">phone</b> for a text reminder, or an <b className="text-moss-700">email</b> for an email reminder.
           <b className="text-moss-700"> Text reminder</b> opens Messages on your phone to send. <b className="text-moss-700">Email reminder</b> sends automatically from your Gmail in one click.
-          Remember to <b className="text-moss-700">Save changes</b> after editing.
+          Changes <b className="text-moss-700">save automatically</b>.
         </p>
       </Card>
     </div>
