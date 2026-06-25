@@ -36,30 +36,37 @@ export async function scanVenmoPayments(days = 45): Promise<VenmoPayment[]> {
   });
 
   const payments: VenmoPayment[] = [];
+  const seen = new Set<string>();
   await client.connect();
   try {
-    // Venmo notifications skip the inbox here, so scan All Mail.
-    const lock = await client.getMailboxLock("[Gmail]/All Mail");
-    try {
-      const since = new Date(Date.now() - days * 24 * 3600 * 1000);
-      const found = await client.search({ from: "venmo@venmo.com", since }, { uid: true });
-      const uids = (Array.isArray(found) ? found : []).slice(-40);
-      for (const uid of uids) {
-        const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
-        if (!msg) continue;
-        const subject = msg.envelope?.subject ?? "";
-        const parsed = parseVenmoSubject(subject);
-        if (parsed) {
-          payments.push({
-            payer: parsed.payer,
-            amount: parsed.amount,
-            date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : "",
-            subject,
-          });
-        }
+    const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+    // All Mail = inbox + archived, but EXCLUDES Trash & Spam — so scan those too
+    // (renters' notifications can get deleted or filtered).
+    for (const box of ["[Gmail]/All Mail", "[Gmail]/Trash", "[Gmail]/Spam"]) {
+      let lock;
+      try {
+        lock = await client.getMailboxLock(box);
+      } catch {
+        continue; // mailbox not available
       }
-    } finally {
-      lock.release();
+      try {
+        const found = await client.search({ from: "venmo@venmo.com", since }, { uid: true });
+        const uids = (Array.isArray(found) ? found : []).slice(-40);
+        for (const uid of uids) {
+          const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+          if (!msg) continue;
+          const subject = msg.envelope?.subject ?? "";
+          const parsed = parseVenmoSubject(subject);
+          if (!parsed) continue;
+          const date = msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : "";
+          const key = `${parsed.payer}|${parsed.amount}|${date}`;
+          if (seen.has(key)) continue; // dedupe across folders
+          seen.add(key);
+          payments.push({ payer: parsed.payer, amount: parsed.amount, date, subject });
+        }
+      } finally {
+        lock.release();
+      }
     }
   } finally {
     await client.logout().catch(() => {});
