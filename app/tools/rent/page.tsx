@@ -20,12 +20,18 @@ function newId() {
 }
 
 type VenmoMatch = {
-  payment: { payer: string; amount: number; date: string };
-  matchId: string | null;
-  matchName: string | null;
+  renterId: string;
+  renterName: string;
+  type: string;
+  rentAmount: number;
+  detected: number;
+  count: number;
+  payers: string[];
+  enough: boolean;
   alreadyPaid: boolean;
 };
-type CheckResult = { enabled: boolean; error?: string; matches: VenmoMatch[] };
+type Unmatched = { payer: string; amount: number; date: string };
+type CheckResult = { enabled: boolean; error?: string; matches: VenmoMatch[]; unmatched?: Unmatched[] };
 
 export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
@@ -202,44 +208,46 @@ export default function RentRollPage() {
             <p className="text-[13px] text-muted">Connect Belinda's Gmail to detect Venmo payments.</p>
           ) : check.error ? (
             <p className="text-[13px] text-[#9a4a32]">{check.error}</p>
-          ) : check.matches.length === 0 ? (
-            <p className="text-[13px] text-muted">No Venmo payments found in the last 45 days.</p>
+          ) : check.matches.length === 0 && (check.unmatched?.length ?? 0) === 0 ? (
+            <p className="text-[13px] text-muted">No Venmo payments found.</p>
           ) : (
-            <ul className="divide-y divide-moss-700/8">
-              {check.matches.map((m, i) => {
-                const live = m.matchId ? entries.find(e => e.id === m.matchId) : null;
-                const isPaidNow = live?.status === "paid";
-                return (
-                  <li key={i} className="flex flex-wrap items-center gap-2 py-2 text-[13px]">
-                    <span className="font-medium text-moss-700">{m.payment.payer}</span>
-                    <span className="text-muted">
-                      paid {fmtUSD(m.payment.amount)}
-                      {m.payment.date ? ` · ${new Date(m.payment.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}
-                    </span>
-                    {m.matchName ? (
-                      isPaidNow ? (
-                        <Pill tone="moss">{m.matchName} · paid ✓</Pill>
+            <>
+              <ul className="divide-y divide-moss-700/8">
+                {check.matches.map(m => {
+                  const live = entries.find(e => e.id === m.renterId);
+                  const isPaid = live?.status === "paid";
+                  return (
+                    <li key={m.renterId} className="flex flex-wrap items-center gap-2 py-2 text-[13px]">
+                      <span className="font-medium text-moss-700">{m.renterName}</span>
+                      <span className="text-muted">
+                        {fmtUSD(m.detected)} detected{m.count > 1 ? ` (${m.count} payments)` : ""}
+                        {m.payers.length ? ` · ${m.payers.join(", ")}` : ""}
+                      </span>
+                      {isPaid ? (
+                        <Pill tone="moss">paid ✓</Pill>
+                      ) : m.enough ? (
+                        <button
+                          onClick={() => update(m.renterId, { status: "paid" })}
+                          className="rounded-md bg-moss-700 px-2.5 py-1 text-[12px] font-medium text-cream hover:bg-moss-600"
+                        >
+                          Mark paid ✓
+                        </button>
                       ) : (
-                        <>
-                          <span className="text-muted">→ {m.matchName}</span>
-                          <button
-                            onClick={() => m.matchId && update(m.matchId, { status: "paid" })}
-                            className="rounded-md bg-moss-700 px-2.5 py-1 text-[12px] font-medium text-cream hover:bg-moss-600"
-                          >
-                            Mark paid ✓
-                          </button>
-                        </>
-                      )
-                    ) : (
-                      <Pill tone="neutral">no matching unpaid renter</Pill>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+                        <Pill tone="champagne">partial · {fmtUSD(m.detected)} of {fmtUSD(m.rentAmount)}</Pill>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {check.unmatched && check.unmatched.length > 0 && (
+                <div className="mt-2 rounded-lg border border-dashed border-moss-700/15 bg-cream/40 px-3 py-2 text-[12px] text-muted">
+                  Not matched to a renter: {check.unmatched.map(u => `${u.payer} ${fmtUSD(u.amount)}`).join(" · ")}
+                </div>
+              )}
+            </>
           )}
           <p className="mt-2 text-[11px] text-muted">
-            Reads Venmo notification emails from the connected Gmail (last 45 days). Marking paid saves automatically.
+            Reads Venmo emails (incl. Trash &amp; Spam), sums each person's payments, and remembers them even if you delete the email. Bank transfers are ignored. Marking paid saves automatically.
           </p>
         </Card>
       )}
