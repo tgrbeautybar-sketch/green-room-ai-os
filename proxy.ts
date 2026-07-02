@@ -9,6 +9,7 @@ function isPublic(pathname: string): boolean {
     pathname === "/login" ||
     pathname === "/privacy" ||
     pathname === "/sms-terms" ||
+    pathname === "/sms-signup" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/hooks") ||
     pathname.startsWith("/api/media") // public so Instagram/Zernio can fetch post images
