@@ -15,8 +15,8 @@ export default function Topbar() {
   const path = usePathname();
   const router = useRouter();
 
-  // No chrome on the login screen.
-  if (path === "/login") return null;
+  // No app chrome on the login screen or public legal pages.
+  if (path === "/login" || path === "/privacy" || path === "/sms-terms") return null;
 
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});

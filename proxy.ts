@@ -7,6 +7,8 @@ import { SESSION_COOKIE, sessionToken, authSecret } from "@/lib/auth";
 function isPublic(pathname: string): boolean {
   return (
     pathname === "/login" ||
+    pathname === "/privacy" ||
+    pathname === "/sms-terms" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/hooks") ||
     pathname.startsWith("/api/media") // public so Instagram/Zernio can fetch post images
