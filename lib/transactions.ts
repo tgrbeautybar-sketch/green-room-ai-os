@@ -150,6 +150,12 @@ export async function listTransactions(from: string, to: string): Promise<Normal
         .gte("date", from)
         .lte("date", to)
         .order("date", { ascending: true })
+        // Tiebreaker on the unique id: `date` alone is not a total order (many
+        // rows share a yyyy-mm-dd), and Postgres LIMIT/OFFSET over a non-unique
+        // sort key can reorder tied rows between the two .range() round-trips —
+        // silently skipping or double-counting rows exactly at a page boundary,
+        // which is the >1000-row case this pagination exists for.
+        .order("id", { ascending: true })
         .range(offset, offset + LIST_PAGE_SIZE - 1);
       if (error) {
         if (isMissingTableError(error.message, error.code)) {

@@ -49,14 +49,18 @@ function makeRow(i: number): TxnRow {
 // just returns `this` to keep the chain going.
 function stubClient(rangeImpl: (start: number, end: number) => Promise<{ data: TxnRow[] | null; error: unknown }>) {
   const range = vi.fn(rangeImpl);
+  // .order() is chained twice now (date, then id as a stable tiebreaker), so
+  // order() must return something that itself has both order() and range().
+  const orderable: { order: () => typeof orderable; range: typeof range } = {
+    order: () => orderable,
+    range,
+  };
   return {
     client: {
       from: () => ({
         select: () => ({
           gte: () => ({
-            lte: () => ({
-              order: () => ({ range }),
-            }),
+            lte: () => orderable,
           }),
         }),
       }),
