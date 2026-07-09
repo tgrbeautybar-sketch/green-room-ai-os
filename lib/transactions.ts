@@ -131,25 +131,40 @@ export async function upsertTransactions(rows: NormalizedTxn[]): Promise<void> {
   await fs.writeFile(TXN_FILE, JSON.stringify([...byId.values()], null, 2), "utf-8");
 }
 
-// Inclusive date range, both ISO yyyy-mm-dd.
+const LIST_PAGE_SIZE = 1000;
+
+// Inclusive date range, both ISO yyyy-mm-dd. Supabase/PostgREST caps a single
+// .select() at 1000 rows by default — for a busy salon that's well under a
+// year of transactions, and without pagination listTransactions silently
+// truncated the ledger (C-2, understated revenue for any window with >1000
+// rows). Page with .range() until a short page comes back.
 export async function listTransactions(from: string, to: string): Promise<NormalizedTxn[]> {
   const sb = supabase();
   if (sb) {
-    const { data, error } = await sb
-      .from("transactions")
-      .select("*")
-      .gte("date", from)
-      .lte("date", to)
-      .order("date", { ascending: true });
-    if (error) {
-      if (isMissingTableError(error.message, error.code)) {
-        throw new Error(
-          `listTransactions: the "transactions" table doesn't exist yet — run the migration in docs/supabase-setup.md (${error.message})`
-        );
+    const rows: TxnRow[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await sb
+        .from("transactions")
+        .select("*")
+        .gte("date", from)
+        .lte("date", to)
+        .order("date", { ascending: true })
+        .range(offset, offset + LIST_PAGE_SIZE - 1);
+      if (error) {
+        if (isMissingTableError(error.message, error.code)) {
+          throw new Error(
+            `listTransactions: the "transactions" table doesn't exist yet — run the migration in docs/supabase-setup.md (${error.message})`
+          );
+        }
+        throw new Error(`listTransactions: ${error.message}`);
       }
-      throw new Error(`listTransactions: ${error.message}`);
+      const page = data ?? [];
+      rows.push(...page);
+      if (page.length < LIST_PAGE_SIZE) break; // short page = no more rows
+      offset += LIST_PAGE_SIZE;
     }
-    return (data ?? []).map(fromRow);
+    return rows.map(fromRow);
   }
 
   const all = await readLocalFile();
