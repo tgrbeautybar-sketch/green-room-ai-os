@@ -74,3 +74,6 @@ Push to GitHub → import the repo in Vercel → set the env vars above → depl
 - `lib/supabase.ts` builds the client only if `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` are set.
 - `lib/store.ts` (KB, prompt, dashboard source, messages) and `lib/storage.ts` (images) use Supabase when available, else local `.data/` for dev.
 - So: no env = local files; full env = Supabase. Same code either way.
+
+## Keep-alive (free tier auto-pause)
+Supabase's free tier **pauses a project after 7 days with no activity** — which silently breaks the app on Vercel (Supabase configured = required, no local-file fallback there). `GET /api/health` does a tiny `app_state` read and is pinged **daily** by a `vercel.json` cron (`0 13 * * *`). The route is public (exempted from the login wall in `proxy.ts`, same as the webhook paths) so Vercel Cron can reach it without a session cookie, and it never throws — a paused project shows up as `"db": "unavailable"` in the response instead of a failed request. If the dashboard ever shows the project paused anyway, just open it in the Supabase dashboard to resume it once — the daily ping should keep it from happening again.

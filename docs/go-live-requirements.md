@@ -10,23 +10,23 @@ What it actually takes to move each module from **demo** to **real**, and exactl
 
 ## Module 1 — Post Studio (Social)
 
-**What it does live:** Belinda picks a post type, the agent drafts the caption in the Green Room voice, she approves, and it schedules to Instagram + Facebook.
+**What it does live:** Belinda picks a post type, the agent drafts the caption in the Green Room voice, she approves, and it posts (or schedules) to Instagram + Facebook.
 
 | Piece | Provider | Status | Notes |
 |---|---|---|---|
 | Caption drafting | Claude (Anthropic) | 🟢 | Live now. Our key. |
-| Publishing to IG + FB | **Zernio API** (decided) | 🟢 code / 🔴 creds | Integration **built** (env-gated). Goes live once creds are set. |
+| Publishing to IG + FB | **Zernio API** (decided) | 🟢 | Live — creds are set. |
+| Image hosting for IG | Supabase Storage / local fallback | 🟢 | Uploaded images get a public URL before Zernio ever sees them. |
+| Scheduling for later | **Zernio API** | 🟢 | "Post now" / "Schedule for later" toggle; New York time, DST-correct. |
+| Post status view | **Zernio API** | 🟢 | History panel groups Needs attention / Upcoming / Posted. |
 
 **Why Zernio, not Buffer or Meta:** Buffer's API is now closed to new apps (can't register / get a client_id). Meta direct is free but needs an app + review. **Zernio** is a unified posting API whose **free tier covers 2 accounts** — exactly Belinda's IG + FB — with no app-review gauntlet. Cheapest + fastest automated path.
 
-**Status — what's done:** `lib/social-publish.ts` + `POST /api/social/publish` call Zernio; the Post Studio "Schedule" button is wired to it. Without creds it cleanly returns demo mode; with creds it publishes for real.
+**Status — what's done:** `lib/social-publish.ts` + `POST /api/social/publish` call Zernio; the Post Studio publish button is wired to it, plus `GET/DELETE /api/social/posts` for the status view. Without creds it cleanly returns demo mode; with creds it publishes for real.
 
-**What we need from them (to flip it live):**
-- A free **Zernio account**.
-- **Instagram connected as a Business/Creator account** linked to a **Facebook Page** (Instagram's rule — a personal IG can't auto-publish), both connected in Zernio via OAuth.
-- Three env vars on the deploy: `ZERNIO_API_KEY`, `ZERNIO_IG_ACCOUNT_ID`, `ZERNIO_FB_ACCOUNT_ID`.
+**The one hard rule — IG posts are blocked unless the photo uploads.** Instagram will never accept a caption-only post, so Post Studio refuses to send one: if a photo was attached but failed to host, or none was attached at all, the button is blocked with a plain-language notice instead of silently going out broken (see `docs/social-setup-zernio.md`). This replaced an earlier bug where a failed image upload was silently skipped and the post went to Instagram with zero media, where it just sat "pending" forever.
 
-**Remaining piece for IG *image* posts:** Instagram requires **publicly-hosted media URLs**. Right now uploaded images are in-browser previews (data URLs), which can't post to IG live. Caption-only posts to Facebook work; IG image posts need an image-hosting step (a small follow-up — upload to a bucket/Zernio media, pass the URL).
+**What we need from them (to flip it live):** already done — Zernio account created, IG connected as Business/Creator linked to the Facebook Page, and all three env vars (`ZERNIO_API_KEY`, `ZERNIO_IG_ACCOUNT_ID`, `ZERNIO_FB_ACCOUNT_ID`) are set.
 
 ---
 
@@ -125,7 +125,7 @@ Grouped so they can act. The 🔴 items are the only true blockers.
 5. A domain/subdomain for the OS.
 
 **Accounts & access:**
-6. **Zernio** (free) account with their **IG (Business/Creator)** + **FB Page** connected → API key + the 2 account IDs. *(Social — integration already built, just needs creds)*
+6. ~~**Zernio** (free) account with their **IG (Business/Creator)** + **FB Page** connected → API key + the 2 account IDs.~~ **Done** — Social posting (incl. scheduling) is live.
 7. **Plaid** bank connection — Belinda links her business checking herself. *(Dashboard + Rent)* ⏳
 8. **Vagaro** API access on her account (Settings → Developers; needs paid plan + CC processing) — gives real-time revenue + direct booking. CSV export is the fallback. *(Dashboard + Front Desk)* ⏳
 9. **Retell** — we set up; confirm they're OK with per-minute voice cost. *(Front Desk)* ⏳
