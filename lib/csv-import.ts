@@ -12,8 +12,13 @@ export type CsvField = "date" | "gross" | "tip" | "item" | "customer" | "transac
 export type CsvMapping = Partial<Record<CsvField, string>>; // field -> actual CSV header
 
 export type CsvParseResult =
-  | { needsMapping: true; headers: string[]; sampleRow: Record<string, string> }
-  | { needsMapping: false; rows: NormalizedTxn[]; skipped: number };
+  | { needsMapping: true; unreadable: false; headers: string[]; sampleRow: Record<string, string> }
+  // Genuine garbage (images, PDFs, prose, JSON) rather than a CSV with
+  // unexpected headers — routing this into the mapping step would show
+  // Belinda a "pick a column" UI full of gibberish selects instead of a
+  // clear "wrong file" error (DV-001).
+  | { needsMapping: false; unreadable: true }
+  | { needsMapping: false; unreadable: false; rows: NormalizedTxn[]; skipped: number };
 
 const HEADER_CANDIDATES: Record<CsvField, string[]> = {
   date: ["date", "transaction date", "sale date"],
@@ -114,6 +119,36 @@ function sha1(input: string): string {
   return createHash("sha1").update(input).digest("hex");
 }
 
+// A stray control character (other than tab/newline/CR, which real CSVs can
+// legitimately carry inside quoted fields) or the Unicode replacement
+// character means this text isn't a decoded CSV at all — it's binary that
+// happened to decode into something header-shaped, e.g. a PNG's magic bytes
+// reading back as a garbled "PNG" header (DV-001). Checked by char code
+// rather than a regex literal so no literal control bytes have to live in
+// source.
+const REPLACEMENT_CHAR_CODE = 0xfffd;
+
+function hasBinarySignature(field: string): boolean {
+  for (let i = 0; i < field.length; i++) {
+    const code = field.charCodeAt(i);
+    const isStrayControlChar = code <= 0x1f && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    if (isStrayControlChar || code === REPLACEMENT_CHAR_CODE) return true;
+  }
+  return false;
+}
+
+// Distinguishes genuine garbage (images, PDFs, prose, JSON) from a real CSV
+// that merely has headers we don't recognize (that one still needs the
+// mapping step, not this error) — DV-001.
+function looksUnreadable(headers: string[], sampleRow: Record<string, string>): boolean {
+  if (headers.length < 2) return true;
+  if (headers.some(hasBinarySignature)) return true;
+  const values = Object.values(sampleRow);
+  if (values.length === 0) return true;
+  if (values.every(v => !v || !v.trim())) return true;
+  return false;
+}
+
 export function parseCsv(csvText: string, confirmedMapping?: CsvMapping): CsvParseResult {
   const parsed = Papa.parse<Record<string, string>>(csvText, {
     header: true,
@@ -123,10 +158,16 @@ export function parseCsv(csvText: string, confirmedMapping?: CsvMapping): CsvPar
 
   const headers = parsed.meta.fields ?? [];
   const dataRows = parsed.data ?? [];
+  const sampleRow = dataRows[0] ?? {};
+
+  if (looksUnreadable(headers, sampleRow)) {
+    return { needsMapping: false, unreadable: true };
+  }
+
   const mapping = resolveMapping(headers, confirmedMapping);
 
   if (!mapping.date || !mapping.gross) {
-    return { needsMapping: true, headers, sampleRow: dataRows[0] ?? {} };
+    return { needsMapping: true, unreadable: false, headers, sampleRow };
   }
 
   const dateHeader = mapping.date;
@@ -183,5 +224,5 @@ export function parseCsv(csvText: string, confirmedMapping?: CsvMapping): CsvPar
     });
   }
 
-  return { needsMapping: false, rows, skipped };
+  return { needsMapping: false, unreadable: false, rows, skipped };
 }

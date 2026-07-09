@@ -183,6 +183,12 @@ export default function Dashboard() {
     fileInputRef.current?.click();
   }
 
+  // Lets someone who picked the wrong file back out of the mapping step
+  // without being forced through "Use these columns" first (DV-001).
+  function cancelMapping() {
+    setCsvStep({ kind: "idle" });
+  }
+
   async function onFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -422,7 +428,14 @@ export default function Dashboard() {
                       <Stat
                         label="Estimated costs"
                         value={fmtUSD(metrics.cogs)}
-                        hint={`Estimated from the ${config.cogsPct ?? "—"}% you entered`}
+                        // In demo preview, cogs is illustrative sample data, not
+                        // derived from a % Belinda actually entered — saying
+                        // otherwise ("—% you entered") is misleading (minor DV fix).
+                        hint={
+                          isDemo && config.cogsPct == null
+                            ? "Sample estimate"
+                            : `Estimated from the ${config.cogsPct ?? "—"}% you entered`
+                        }
                         illustrative={isDemo}
                       />
                       <Stat
@@ -474,6 +487,7 @@ export default function Dashboard() {
                   onMapCustomer={setMapCustomer}
                   onMapTransactionId={setMapTransactionId}
                   onConfirmMapping={confirmMapping}
+                  onCancelMapping={cancelMapping}
                   onRetry={openFilePicker}
                 />
               )}
@@ -495,6 +509,7 @@ export default function Dashboard() {
                   onMapCustomer={setMapCustomer}
                   onMapTransactionId={setMapTransactionId}
                   onConfirmMapping={confirmMapping}
+                  onCancelMapping={cancelMapping}
                   onRetry={openFilePicker}
                 />
               )}
@@ -808,6 +823,7 @@ function CsvFlow({
   onMapCustomer,
   onMapTransactionId,
   onConfirmMapping,
+  onCancelMapping,
   onRetry,
 }: {
   step: CsvStep;
@@ -822,6 +838,7 @@ function CsvFlow({
   onMapCustomer: (v: string) => void;
   onMapTransactionId: (v: string) => void;
   onConfirmMapping: () => void;
+  onCancelMapping: () => void;
   onRetry: () => void;
 }) {
   if (step.kind === "uploading") {
@@ -893,7 +910,7 @@ function CsvFlow({
           />
         </div>
 
-        <div className="mt-3">
+        <div className="mt-3 flex items-center gap-2">
           <button
             type="button"
             onClick={onConfirmMapping}
@@ -901,6 +918,13 @@ function CsvFlow({
             className="rounded-lg bg-moss-700 px-4 py-2 text-sm font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
           >
             Use these columns
+          </button>
+          <button
+            type="button"
+            onClick={onCancelMapping}
+            className="rounded-lg border border-transparent px-3 py-2 text-[13px] text-muted transition hover:border-[#c8857a]/40 hover:text-[#9a4a32]"
+          >
+            This isn't the right file
           </button>
         </div>
       </Card>

@@ -7,7 +7,7 @@ describe("parseCsv row id ordinals (F-3)", () => {
   it("gives identical same-day walk-ins distinct ids via a per-row ordinal", () => {
     const csv = HEADER + "07/09/2026,45.00,Haircut,\n07/09/2026,45.00,Haircut,\n";
     const result = parseCsv(csv);
-    if (result.needsMapping) throw new Error("expected a mapped result");
+    if (result.needsMapping || result.unreadable) throw new Error("expected a mapped result");
 
     expect(result.rows).toHaveLength(2);
     const [a, b] = result.rows;
@@ -25,7 +25,9 @@ describe("parseCsv row id ordinals (F-3)", () => {
 
     const first = parseCsv(csv);
     const second = parseCsv(csv);
-    if (first.needsMapping || second.needsMapping) throw new Error("expected mapped results");
+    if (first.needsMapping || first.unreadable || second.needsMapping || second.unreadable) {
+      throw new Error("expected mapped results");
+    }
 
     expect(second.rows.map(r => r.id)).toEqual(first.rows.map(r => r.id));
   });
@@ -39,7 +41,9 @@ describe("parseCsv row id ordinals (F-3)", () => {
 
     const first = parseCsv(csv);
     const second = parseCsv(csv);
-    if (first.needsMapping || second.needsMapping) throw new Error("expected mapped results");
+    if (first.needsMapping || first.unreadable || second.needsMapping || second.unreadable) {
+      throw new Error("expected mapped results");
+    }
 
     expect(first.skipped).toBe(1);
     expect(first.rows.map(r => r.id)).toEqual(second.rows.map(r => r.id));
@@ -49,10 +53,68 @@ describe("parseCsv row id ordinals (F-3)", () => {
   it("uses the external transaction id verbatim when present, ignoring ordinal", () => {
     const csvWithId = "Date,Total,Item,Client,Transaction Id\n07/09/2026,45.00,Haircut,,TX-1\n07/09/2026,45.00,Haircut,,TX-2\n";
     const result = parseCsv(csvWithId);
-    if (result.needsMapping) throw new Error("expected a mapped result");
+    if (result.needsMapping || result.unreadable) throw new Error("expected a mapped result");
 
     expect(result.rows[0].id).toBe("csv:TX-1");
     expect(result.rows[1].id).toBe("csv:TX-2");
+  });
+});
+
+describe("parseCsv garbage detection (DV-001)", () => {
+  it("flags a PNG's magic bytes as unreadable rather than routing to mapping", () => {
+    // Mirrors what a PNG's signature bytes decode to as text: the replacement
+    // character (invalid UTF-8 byte) followed by the SUB control byte (0x1A)
+    // PNG embeds right after "PNG".
+    const pngLike = `${String.fromCharCode(0xfffd)}PNG\r\n${String.fromCharCode(0x1a)}\n`;
+    const result = parseCsv(pngLike);
+    expect(result.needsMapping).toBe(false);
+    expect(result.unreadable).toBe(true);
+  });
+
+  it("flags plain prose as unreadable", () => {
+    const prose =
+      "This report was generated automatically for internal review purposes only. " +
+      "It does not contain any sales data and should be disregarded entirely.";
+    const result = parseCsv(prose);
+    expect(result.needsMapping).toBe(false);
+    expect(result.unreadable).toBe(true);
+  });
+
+  it("flags a pretty-printed JSON blob as unreadable", () => {
+    const json = '{\n  "name": "Jo"\n  "amount": 45\n}\n';
+    const result = parseCsv(json);
+    expect(result.needsMapping).toBe(false);
+    expect(result.unreadable).toBe(true);
+  });
+
+  it("flags a replacement character in a header even with two+ columns (not just the headers.length<2 case)", () => {
+    const csv = `${String.fromCharCode(0xfffd)}PNG,IHDR\nsomeval,otherval\n`;
+    const result = parseCsv(csv);
+    expect(result.needsMapping).toBe(false);
+    expect(result.unreadable).toBe(true);
+  });
+
+  it("flags an empty file as unreadable rather than a mapped zero-row result", () => {
+    const result = parseCsv("");
+    expect(result.needsMapping).toBe(false);
+    expect(result.unreadable).toBe(true);
+  });
+
+  it("still routes a real CSV with unrecognized headers to mapping, not the error path", () => {
+    const wrongHeaders = "Name,Phone\nJo,555\n";
+    const result = parseCsv(wrongHeaders);
+    expect(result.unreadable).toBe(false);
+    expect(result.needsMapping).toBe(true);
+  });
+
+  it("parses a valid Vagaro-ish CSV into rows", () => {
+    const csv = "Date,Total,Item,Client\n07/09/2026,45.00,Haircut,Jo\n";
+    const result = parseCsv(csv);
+    expect(result.unreadable).toBe(false);
+    expect(result.needsMapping).toBe(false);
+    if (result.needsMapping || result.unreadable) throw new Error("expected a mapped result");
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].gross).toBe(45);
   });
 });
 

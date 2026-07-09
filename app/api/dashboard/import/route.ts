@@ -28,6 +28,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "couldn't read that file" }, { status: 200 });
   }
 
+  if (parsed.unreadable) {
+    // Genuine garbage (image bytes, PDFs, prose, JSON) — not a CSV with
+    // unexpected headers — so send Belinda the "wrong file" error instead of
+    // the column-mapping step full of gibberish selects (DV-001).
+    return NextResponse.json({ ok: false, error: "unreadable" }, { status: 200 });
+  }
+
   if (parsed.needsMapping) {
     return NextResponse.json(
       { ok: false, needsMapping: true, headers: parsed.headers, sampleRow: parsed.sampleRow },
