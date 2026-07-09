@@ -12,6 +12,9 @@ type Mode = "demo" | "live" | "csv" | "empty";
 
 type TopService = { name: string; share: number } | null;
 
+// A blended "total income" (sales + rent) tile was deferred pending
+// Belinda's answer on how she wants that framed — the server doesn't send
+// it, so there's no field for it here (R-2).
 type Metrics = {
   gross: number;
   avgTicket: number;
@@ -20,7 +23,6 @@ type Metrics = {
   repeatClientRate: number | null;
   cogs: number | null;
   net: number | null;
-  totalIncome?: number; // blended sales + rent total — the server doesn't send this yet
 };
 
 type Coverage = { from: string; to: string; days: number };
@@ -46,7 +48,7 @@ type CsvStep =
   | { kind: "uploading" }
   | { kind: "needsMapping"; headers: string[]; sampleRow: Record<string, string>; fileName: string; rawText: string }
   | { kind: "success"; imported: number; skipped: number; through: string | null }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; detail?: string };
 
 // ---------- formatting helpers ----------
 
@@ -86,6 +88,9 @@ export default function Dashboard() {
   const [csvStep, setCsvStep] = useState<CsvStep>({ kind: "idle" });
   const [mapDate, setMapDate] = useState("");
   const [mapAmount, setMapAmount] = useState("");
+  const [mapItem, setMapItem] = useState("");
+  const [mapCustomer, setMapCustomer] = useState("");
+  const [mapTransactionId, setMapTransactionId] = useState("");
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   const fetchMetrics = useCallback(async () => {
@@ -131,11 +136,16 @@ export default function Dashboard() {
       .catch(() => {});
   }, []);
 
-  // Default the mapping selects to the first couple of headers when a file needs mapping.
+  // Default the required selects to the first couple of headers when a file
+  // needs mapping; the optional ones (item/customer/transaction id) start
+  // blank so we never guess wrong on a column Belinda didn't ask us to map.
   useEffect(() => {
     if (csvStep.kind === "needsMapping") {
       setMapDate(csvStep.headers[0] ?? "");
       setMapAmount(csvStep.headers[1] ?? csvStep.headers[0] ?? "");
+      setMapItem("");
+      setMapCustomer("");
+      setMapTransactionId("");
     }
   }, [csvStep]);
 
@@ -216,7 +226,7 @@ export default function Dashboard() {
         return;
       }
       if (!json.ok) {
-        setCsvStep({ kind: "error", message: "server" });
+        setCsvStep({ kind: "error", message: "server", detail: json.error });
         return;
       }
 
@@ -234,7 +244,13 @@ export default function Dashboard() {
 
   async function confirmMapping() {
     if (csvStep.kind !== "needsMapping") return;
-    const mapping: CsvMapping = { date: mapDate, gross: mapAmount };
+    const mapping: CsvMapping = {
+      date: mapDate,
+      gross: mapAmount,
+      ...(mapItem ? { item: mapItem } : {}),
+      ...(mapCustomer ? { customer: mapCustomer } : {}),
+      ...(mapTransactionId ? { transactionId: mapTransactionId } : {}),
+    };
     try {
       await fetch("/api/dashboard/source", {
         method: "POST",
@@ -254,6 +270,20 @@ export default function Dashboard() {
       await fetch("/api/dashboard/import", { method: "DELETE" });
     } finally {
       fetchMetrics();
+    }
+  }
+
+  async function resetColumnMapping() {
+    try {
+      const res = await fetch("/api/dashboard/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csvMapping: null }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setConfig(prev => ({ ...prev, csvMapping: null }));
+    } catch {
+      /* best-effort — Belinda can just retry the button */
     }
   }
 
@@ -319,6 +349,16 @@ export default function Dashboard() {
 
       {data && metrics && rent && (
         <>
+          {data.error && (
+            <div
+              role="alert"
+              className="rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]"
+            >
+              Some of your data couldn't load right now — the numbers below may be incomplete. Try again in a
+              minute.
+            </div>
+          )}
+
           {mode === "demo" && (
             <div
               role="status"
@@ -357,18 +397,14 @@ export default function Dashboard() {
                 onConfirmClear={clearImported}
               />
 
-              {typeof metrics.totalIncome === "number" && (
-                <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <Stat label="Total income" value={fmtUSD(metrics.totalIncome)} sub="Sales + rent" illustrative={isDemo} />
-                </section>
-              )}
+              {/* Blended "total income" (sales + rent) tile deferred pending Belinda's answer — see Metrics type comment above. */}
 
               <div className={refreshing ? "space-y-4 opacity-60 transition" : "space-y-4 transition"}>
                 <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Your salon sales</h2>
                 <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Stat label="Sales" value={fmtUSD(metrics.gross)} sub="Your service & retail sales" illustrative={isDemo} />
                   <Stat label="Average ticket" value={fmtUSD(metrics.avgTicket)} sub="Per booking" illustrative={isDemo} />
-                  <Stat label="Bookings" value={String(metrics.bookings)} sub="Appointments in this period" illustrative={isDemo} />
+                  <Stat label="Transactions" value={String(metrics.bookings)} sub="Sales in this period" illustrative={isDemo} />
                   <Stat
                     label="Top service"
                     value={metrics.topService ? metrics.topService.name : "—"}
@@ -429,8 +465,14 @@ export default function Dashboard() {
                   step={csvStep}
                   mapDate={mapDate}
                   mapAmount={mapAmount}
+                  mapItem={mapItem}
+                  mapCustomer={mapCustomer}
+                  mapTransactionId={mapTransactionId}
                   onMapDate={setMapDate}
                   onMapAmount={setMapAmount}
+                  onMapItem={setMapItem}
+                  onMapCustomer={setMapCustomer}
+                  onMapTransactionId={setMapTransactionId}
                   onConfirmMapping={confirmMapping}
                   onRetry={openFilePicker}
                 />
@@ -444,8 +486,14 @@ export default function Dashboard() {
                   step={csvStep}
                   mapDate={mapDate}
                   mapAmount={mapAmount}
+                  mapItem={mapItem}
+                  mapCustomer={mapCustomer}
+                  mapTransactionId={mapTransactionId}
                   onMapDate={setMapDate}
                   onMapAmount={setMapAmount}
+                  onMapItem={setMapItem}
+                  onMapCustomer={setMapCustomer}
+                  onMapTransactionId={setMapTransactionId}
                   onConfirmMapping={confirmMapping}
                   onRetry={openFilePicker}
                 />
@@ -493,7 +541,6 @@ export default function Dashboard() {
                   step="0.1"
                   value={cogsInput}
                   onChange={e => setCogsInput(e.target.value)}
-                  onBlur={saveSettings}
                   placeholder="e.g. 18"
                   className="mt-2 w-32 rounded-lg border border-moss-700/15 bg-white px-3 py-2 text-sm text-moss-800 outline-none focus:border-moss-500"
                 />
@@ -509,10 +556,28 @@ export default function Dashboard() {
                   min={0}
                   value={hoursInput}
                   onChange={e => setHoursInput(e.target.value)}
-                  onBlur={saveSettings}
                   placeholder="e.g. 35"
                   className="mt-2 w-32 rounded-lg border border-moss-700/15 bg-white px-3 py-2 text-sm text-moss-800 outline-none focus:border-moss-500"
                 />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-moss-700/10 bg-cream/50 px-4 py-3">
+                <div>
+                  <div className="text-[13px] font-medium text-moss-700">CSV column mapping</div>
+                  <div className="text-[12px] leading-relaxed text-muted">
+                    {config.csvMapping
+                      ? "Saved — future imports of the same export format skip the mapping step."
+                      : "No mapping saved yet — you'll be asked the first time you import a CSV."}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={resetColumnMapping}
+                  disabled={!config.csvMapping}
+                  className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-50"
+                >
+                  Reset column mapping
+                </button>
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-moss-700/10 bg-cream/50 px-4 py-3">
@@ -734,16 +799,28 @@ function CsvFlow({
   step,
   mapDate,
   mapAmount,
+  mapItem,
+  mapCustomer,
+  mapTransactionId,
   onMapDate,
   onMapAmount,
+  onMapItem,
+  onMapCustomer,
+  onMapTransactionId,
   onConfirmMapping,
   onRetry,
 }: {
   step: CsvStep;
   mapDate: string;
   mapAmount: string;
+  mapItem: string;
+  mapCustomer: string;
+  mapTransactionId: string;
   onMapDate: (v: string) => void;
   onMapAmount: (v: string) => void;
+  onMapItem: (v: string) => void;
+  onMapCustomer: (v: string) => void;
+  onMapTransactionId: (v: string) => void;
   onConfirmMapping: () => void;
   onRetry: () => void;
 }) {
@@ -800,6 +877,22 @@ function CsvFlow({
             Example from your file: {step.sampleRow[mapDate] || "—"} · {step.sampleRow[mapAmount] || "—"}
           </p>
         )}
+
+        <p className="mt-4 text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+          A few more columns — optional
+        </p>
+        <div className="mt-2 grid gap-3 sm:grid-cols-3">
+          <OptionalMappingSelect id="map-item" label="Item / service" headers={step.headers} value={mapItem} onChange={onMapItem} />
+          <OptionalMappingSelect id="map-customer" label="Client" headers={step.headers} value={mapCustomer} onChange={onMapCustomer} />
+          <OptionalMappingSelect
+            id="map-transaction-id"
+            label="Transaction ID"
+            headers={step.headers}
+            value={mapTransactionId}
+            onChange={onMapTransactionId}
+          />
+        </div>
+
         <div className="mt-3">
           <button
             type="button"
@@ -824,10 +917,19 @@ function CsvFlow({
   }
 
   if (step.kind === "error") {
+    // The transactions-table-missing-migration error has distinctive wording
+    // (see lib/transactions.ts) — detect it and show Belinda the real reason
+    // instead of a generic "bad file" message that would send her looking in
+    // the wrong place (F-1).
+    const isMigrationError = !!step.detail && /run the migration/i.test(step.detail);
     return (
       <div role="alert" className="rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
-        <p className="font-semibold">We couldn't read that file</p>
-        <p className="mt-1">Make sure it's the CSV you exported from Vagaro, then try again.</p>
+        <p className="font-semibold">
+          {isMigrationError ? "We can't save your sales yet — setup needed" : "We couldn't read that file"}
+        </p>
+        <p className="mt-1">
+          {isMigrationError ? step.detail : "Make sure it's the CSV you exported from Vagaro, then try again."}
+        </p>
         <button
           type="button"
           onClick={onRetry}
@@ -840,6 +942,41 @@ function CsvFlow({
   }
 
   return null;
+}
+
+function OptionalMappingSelect({
+  id,
+  label,
+  headers,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  headers: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+        {label} <span className="font-normal normal-case tracking-normal text-muted/70">(optional)</span>
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-moss-700/15 bg-white px-3 py-2 text-sm text-moss-800 outline-none focus:border-moss-500"
+      >
+        <option value="">— none —</option>
+        {headers.map(h => (
+          <option key={h} value={h}>
+            {h}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function DashboardSkeleton() {

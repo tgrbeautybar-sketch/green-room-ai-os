@@ -134,6 +134,12 @@ export function parseCsv(csvText: string, confirmedMapping?: CsvMapping): CsvPar
   const importedAt = new Date().toISOString();
   const rows: NormalizedTxn[] = [];
   let skipped = 0;
+  // Per-file ordinal over KEPT rows only (skipped rows never reach here), so
+  // re-importing the exact same export walks the same rows in the same order
+  // and reproduces the same ordinals — same ids, net zero new rows. Without
+  // this, two identical same-day walk-ins (same date/amount/item/no id)
+  // hashed to one id and silently collapsed into a single row (F-3).
+  let ordinal = 0;
 
   for (const row of dataRows) {
     const date = parseDateToISO(row[dateHeader]);
@@ -150,9 +156,15 @@ export function parseCsv(csvText: string, confirmedMapping?: CsvMapping): CsvPar
     const externalId = mapping.transactionId ? (row[mapping.transactionId] ?? "").trim() : "";
 
     // Vagaro-provided transaction ids are authoritative dedupe keys; without
-    // one, hash the row's identifying fields so re-importing the same export
-    // produces the same ids (net zero new rows) instead of duplicating everything.
-    const id = externalId ? `csv:${externalId}` : `csv:${sha1(`${date}|${gross}|${itemName}|${customerRaw}`)}`;
+    // one, hash the row's identifying fields plus its ordinal so re-importing
+    // the same export produces the same ids (net zero new rows) instead of
+    // duplicating everything, while distinct rows with identical-looking
+    // fields (e.g. two $45 walk-in haircuts on the same day) still get
+    // distinct ids.
+    const id = externalId
+      ? `csv:${externalId}`
+      : `csv:${sha1(`${date}|${gross}|${itemName}|${customerRaw}`)}:${ordinal}`;
+    ordinal++;
 
     rows.push({
       id,
