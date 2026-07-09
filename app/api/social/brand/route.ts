@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getState, setState } from "@/lib/store";
+import { safeGetState, setState } from "@/lib/store";
 
 export const runtime = "nodejs";
 
@@ -11,7 +11,9 @@ type Brand = { text: string; updatedAt: string | null };
 const EMPTY: Brand = { text: "", updatedAt: null };
 
 export async function GET() {
-  const b = await getState<Brand>("brand-voice");
+  // Never 500 here — if Supabase is unreachable, the panel just shows an empty,
+  // unsaved brand voice instead of breaking the whole page.
+  const b = await safeGetState<Brand | null>("brand-voice", null);
   return NextResponse.json({ ...EMPTY, ...(b ?? {}), saved: b != null });
 }
 

@@ -12,7 +12,8 @@ function isPublic(pathname: string): boolean {
     pathname === "/sms-signup" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/hooks") ||
-    pathname.startsWith("/api/media") // public so Instagram/Zernio can fetch post images
+    pathname.startsWith("/api/media") || // public so Instagram/Zernio can fetch post images
+    pathname === "/api/health" // public so Vercel Cron can ping it to keep Supabase warm
   );
 }
 

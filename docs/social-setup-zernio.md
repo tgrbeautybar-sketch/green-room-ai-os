@@ -29,19 +29,37 @@ ZERNIO_FB_ACCOUNT_ID=<facebook account id>
 That's the moment it flips from demo → live. No code change.
 
 ## Step 6 — Test
-- Open Post Studio → pick a post type → review the AI caption → **Schedule**.
-- The button reports **live** (vs demo). Confirm the post lands on Facebook (and Instagram once Step "image hosting" below is done).
+- Open Post Studio → pick a post type → review the AI caption → choose **Post now** or **Schedule for later** → publish.
+- The button reports **live** (vs demo). Confirm the post lands on Facebook and Instagram.
 
-## Remaining piece on our side — Instagram images
-Instagram requires images to be at a **public web URL**. Right now uploaded images are in-browser previews (data URLs) that IG can't fetch, so:
-- **Facebook text posts work now.**
-- **Instagram image posts** need an image-hosting step (upload the image to storage → pass the public URL to Zernio). That's a small build I owe — flagging it so it's not a surprise.
+## Instagram images — done
+Instagram requires images to be at a **public web URL**. Uploaded images are hosted (Supabase Storage, or a local fallback in dev) before their URL is ever sent to Zernio, so:
+- **Facebook text posts work.**
+- **Instagram image posts work**, as long as the upload succeeds.
+
+**The one hard rule this creates: IG posts are blocked unless the photo uploads.** Instagram will never accept a caption-only post. Post Studio enforces this on both sides:
+- **Client-side**, before publishing: if Instagram is on and zero of the attached photos successfully hosted, the button is blocked with a plain notice ("Instagram needs a photo") offering **Try again** or **Post to Facebook only**. If *some* photos hosted and some didn't, it asks whether to post with the ones that worked or retry.
+- **Server-side** (`POST /api/social/publish`), as a backstop: if Instagram is targeted with no media at all, it 400s with `"Instagram requires an image."` rather than letting a broken post through.
+
+This exists because of a real incident: an earlier version silently skipped failed uploads, so Instagram posts went out with zero media and Zernio held them "pending" forever with no way to notice from the UI. The status view (below) now also flags any pre-existing post stuck in exactly that state.
+
+## Scheduling for later
+Post Studio has a "Post now" / "Schedule for later" toggle. Picking a date/time (labeled "salon time — New York") converts that naive value into a DST-correct ISO timestamp with an explicit UTC offset before sending it to Zernio along with `timezone: "America/New_York"`. Times in the past are rejected inline before you can submit.
+
+## Post status view
+The "History" section on Post Studio calls `GET /api/social/posts` (never a hard error — an unreachable Zernio returns a friendly retry message instead of a broken page) and groups posts into:
+- **Needs attention** — anything that actually failed, or an Instagram post that's been "pending" for 10+ minutes with no media (i.e. stuck the way the incident above produced).
+- **Upcoming** — scheduled, soonest first.
+- **Posted** — published, newest first.
+
+Each row can be removed via `DELETE /api/social/posts?id=...` (Zernio documents `DELETE /posts/<id>`), with an inline "Remove this? / Yes, remove / Keep" confirm.
 
 ## Summary — what's needed from whom
 | Item | Who |
 |---|---|
-| IG = Business/Creator + linked FB Page | Belinda (you guide her) |
-| Free Zernio account + connect IG/FB | You |
-| API key + 2 account IDs → env vars | You |
-| Image hosting for IG image posts | Me (build) |
+| IG = Business/Creator + linked FB Page | ✅ done |
+| Free Zernio account + connect IG/FB | ✅ done |
+| API key + 2 account IDs → env vars | ✅ done |
+| Image hosting for IG image posts | ✅ done |
+| Scheduling + status view | ✅ done |
 | Caption drafting | ✅ already live (Claude) |

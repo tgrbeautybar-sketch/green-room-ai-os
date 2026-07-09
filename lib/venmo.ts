@@ -24,6 +24,18 @@ export function parseVenmoSubject(subject: string): { payer: string; amount: num
   return { payer: m[1].trim(), amount: parseFloat(m[2].replace(/,/g, "")) };
 }
 
+// Venmo notification emails are easily spoofed by subject line alone, so we also
+// require the message to have actually passed DKIM as venmo.com before trusting it.
+// A skipped message just lands in "unmatched" later (safe-failure, not silent loss).
+function passesVenmoAuth(headerBuf: Buffer | undefined): boolean {
+  if (!headerBuf) return false;
+  const text = headerBuf.toString("utf-8");
+  if (!/dkim=pass/i.test(text)) return false;
+  const domainMatch = text.match(/header\.(?:d|i)=(?:@)?([a-z0-9.-]+)/i);
+  const domain = domainMatch?.[1]?.toLowerCase() ?? "";
+  return domain === "venmo.com" || domain.endsWith(".venmo.com");
+}
+
 export async function scanVenmoPayments(days = 45): Promise<VenmoPayment[]> {
   if (!venmoScanEnabled) return [];
 
@@ -53,8 +65,13 @@ export async function scanVenmoPayments(days = 45): Promise<VenmoPayment[]> {
         const found = await client.search({ from: "venmo@venmo.com", since }, { uid: true });
         const uids = (Array.isArray(found) ? found : []).slice(-40);
         for (const uid of uids) {
-          const msg = await client.fetchOne(uid, { envelope: true }, { uid: true });
+          const msg = await client.fetchOne(
+            uid,
+            { envelope: true, headers: ["authentication-results"] },
+            { uid: true }
+          );
           if (!msg) continue;
+          if (!passesVenmoAuth(msg.headers)) continue; // unverifiable/spoofed sender — skip, don't trust subject alone
           const subject = msg.envelope?.subject ?? "";
           const parsed = parseVenmoSubject(subject);
           if (!parsed) continue;
