@@ -20,8 +20,10 @@ export async function POST(req: NextRequest) {
   }
 
   // Retell custom functions POST { call, name, args:{...} }; other callers may send fields at top level.
-  const raw = (await req.json().catch(() => ({}))) as { args?: Record<string, unknown> } & Record<string, unknown>;
+  const raw = (await req.json().catch(() => ({}))) as
+    { call?: { call_id?: string }; args?: Record<string, unknown> } & Record<string, unknown>;
   const body = (raw.args ?? raw) as Partial<CapturedMessage> & { type?: string };
+  const callId = (raw.call?.call_id ?? "").toString().slice(0, 120) || undefined;
 
   const msg: CapturedMessage = {
     id: `msg_${Date.now()}`,
@@ -32,6 +34,7 @@ export async function POST(req: NextRequest) {
     preferredStylist: (body.preferredStylist ?? "").toString().slice(0, 120),
     note: (body.note ?? "").toString().slice(0, 2000),
     receivedAt: new Date().toISOString(),
+    callId,
   };
 
   // 1) Persist — but never let a storage outage swallow the message entirely:

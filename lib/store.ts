@@ -66,6 +66,7 @@ export type CapturedMessage = {
   preferredStylist: string;
   note: string;
   receivedAt: string;
+  callId?: string;
 };
 
 const MSG_FILE = path.join(DATA_DIR, "messages.json");
@@ -73,7 +74,7 @@ const MSG_FILE = path.join(DATA_DIR, "messages.json");
 export async function addMessage(msg: CapturedMessage): Promise<void> {
   const sb = supabase();
   if (sb) {
-    const { error } = await sb.from("messages").insert({
+    const row: Record<string, unknown> = {
       id: msg.id,
       type: msg.type,
       caller_name: msg.callerName,
@@ -82,8 +83,30 @@ export async function addMessage(msg: CapturedMessage): Promise<void> {
       preferred_stylist: msg.preferredStylist,
       note: msg.note,
       received_at: msg.receivedAt,
-    });
-    if (error) throw new Error(`addMessage: ${error.message}`);
+      call_id: msg.callId ?? null,
+    };
+    const { error } = await sb.from("messages").insert(row);
+    if (error) {
+      // Tolerate the call_id column not existing yet on DBs that haven't run
+      // the migration in docs/supabase-setup.md — retry once without it so
+      // the message still gets captured instead of being lost.
+      //
+      // PostgREST reports this as code PGRST204 with message "Could not find
+      // the 'call_id' column of 'messages' in the schema cache" — it does NOT
+      // say "does not exist", so match on the PGRST204 code too. Stay
+      // column-specific in the message check (must mention call_id) so an
+      // unrelated schema-cache error for some other column still throws.
+      const isMissingCallIdColumn =
+        error.code === "PGRST204" ||
+        /column[^.]*call_id[^.]*does not exist|could not find[^.]*call_id[^.]*column/i.test(error.message);
+      if (isMissingCallIdColumn) {
+        delete row.call_id;
+        const retry = await sb.from("messages").insert(row);
+        if (retry.error) throw new Error(`addMessage: ${retry.error.message}`);
+        return;
+      }
+      throw new Error(`addMessage: ${error.message}`);
+    }
     return;
   }
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -110,6 +133,7 @@ export async function listMessages(limit = 50): Promise<CapturedMessage[]> {
       preferredStylist: r.preferred_stylist ?? "",
       note: r.note ?? "",
       receivedAt: r.received_at,
+      callId: r.call_id ?? undefined,
     }));
   }
   return (await readMessagesFile()).slice(0, limit);

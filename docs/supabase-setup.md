@@ -30,6 +30,13 @@ create table if not exists messages (
 );
 create index if not exists messages_received_at_idx on messages (received_at desc);
 
+-- Migration (run this if the `messages` table already exists from before call
+-- transcripts shipped): links a captured message/booking back to the Retell
+-- call it came from, so the Front Desk Agent page can show a "Booked" badge
+-- on the matching row in the call log. Nullable — old rows and rows Retell
+-- posts without a call context still insert fine.
+alter table messages add column if not exists call_id text;
+
 -- Lock both tables: with RLS on and no policies, only the SECRET key (which
 -- bypasses RLS) can touch them. The publishable/public key gets zero access.
 alter table app_state enable row level security;
