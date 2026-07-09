@@ -34,10 +34,14 @@ export async function POST(req: NextRequest) {
   }
 
   const entries: RentEntry[] = body.entries.slice(0, 300).map(e => {
-    // A venmoName that's whitespace-only (or trims to empty) must count as "not
-    // set" — otherwise it silently wins over the name-based fallback match in
-    // check-payments and no payment ever matches this renter again.
+    // A venmoName/email/phone that's whitespace-only (or trims to empty) must
+    // count as "not set" — a whitespace-only venmoName otherwise silently
+    // wins over the name-based fallback match in check-payments, and a
+    // whitespace-only email passes the has-email check in classifyRenter but
+    // then fails every send.
     const venmoName = String(e.venmoName ?? "").trim();
+    const email = String(e.email ?? "").trim();
+    const phone = String(e.phone ?? "").trim();
     return {
       id: String(e.id ?? "").slice(0, 48) || `r_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
       name: String(e.name ?? "").slice(0, 120),
@@ -45,8 +49,8 @@ export async function POST(req: NextRequest) {
       amount: Number.isFinite(e.amount) ? Math.max(0, Math.round(e.amount)) : 0,
       status: e.status === "paid" ? "paid" : "unpaid",
       note: e.note ? String(e.note).slice(0, 200) : undefined,
-      email: e.email ? String(e.email).slice(0, 200) : undefined,
-      phone: e.phone ? String(e.phone).slice(0, 40) : undefined,
+      email: email ? email.slice(0, 200) : undefined,
+      phone: phone ? phone.slice(0, 40) : undefined,
       venmoName: venmoName ? venmoName.slice(0, 120) : undefined,
     };
   });
