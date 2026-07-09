@@ -36,19 +36,20 @@ What it actually takes to move each module from **demo** to **real**, and exactl
 
 | Piece | Provider | Status | Notes |
 |---|---|---|---|
-| Her booking/service revenue | **Vagaro API + webhooks** (preferred) *or* CSV export (fallback) | 🟡🔴⏳ | Vagaro **does** have a public API + a Transactions webhook → real-time revenue. Requires a paid plan w/ Vagaro CC processing; access activates in ~7 business days. |
-| Bank / rent / deposits | **Plaid** | 🟡🔴⏳ | Production access ~3–5 business days to approve. |
+| Her booking/service revenue | **CSV export** (live today) *or* **Vagaro API + webhooks** (once approved) | 🟢🟡🔴⏳ | CSV upload is live now — no waiting. The Transactions webhook receiver is also live and reachable; it just has no Vagaro account to authenticate against until API access is approved (~7 business days, needs a paid plan + Vagaro CC processing). |
+| Rent she collects | Venmo email scan (already live) | 🟢 | Unchanged — same `rent-roster` + `venmo-payments` data the Rent Roll tool uses; the dashboard's rent section reads it independently of the sales side. |
+| Bank / other deposits | **Plaid** | 🟡🔴⏳ | Production access ~3–5 business days to approve. Not required for the dashboard to work today — rent is already covered via Venmo. |
 
-**Vagaro integration option (recommended):** Vagaro now offers token-auth APIs (Appointments, Customers, Employees, Locations) and webhooks (Appointments, **Transactions**, Customers, etc.). The **Transactions webhook** streams her sales in real time — no CSV chore. ~$10/mo for 5,000 webhook calls. **CSV export stays as the no-cost fallback** if she'd rather not enable the API.
+**Status — what's done:** every sale (CSV import today, Vagaro webhook/API once creds land) normalizes into one sales ledger (`lib/transactions.ts`, migration in `docs/supabase-setup.md`). `lib/csv-import.ts` fuzzy-matches Vagaro's export column names so the upload works without a fixed schema. `lib/metrics.ts` computes gross, average ticket, top service, repeat-client rate, and an optional estimated-profit number (only if she enters a product/supply cost %) — all unit-tested. The dashboard shows sales as "Imported" (CSV) today, and will switch itself to "Vagaro connected" the moment `VAGARO_CLIENT_ID`/`VAGARO_CLIENT_SECRET` are set — no code change needed on our end when that day comes. See `docs/vagaro-setup.md` for her self-serve steps.
 
-**What we need from them:**
-- **Vagaro API access** on *her* account — requested in Settings → Developers → APIs & Webhooks (needs a paid plan + Vagaro credit-card processing, not free trial). ⏳ ~7 business days. *(Or, fallback: weekly CSV exports / her login.)*
-- **Bank connection via Plaid Link** — she connects her business checking herself (secure, we never see the password).
-- From the intake (§13): her definition of "her income," product/COGS %, what a good week looks like.
+**What we need from them (to flip on the live connection — CSV works without this):**
+- **Vagaro API access** on *her* account — requested in Settings → Developers → APIs & Webhooks (needs a paid plan + Vagaro credit-card processing, not free trial). ⏳ ~7 business days.
+- Once approved: the Client ID, Client Secret, and Merchant ID Vagaro gives her (`docs/vagaro-setup.md` has the exact steps + webhook URL to register).
+- Her product/supply cost % (optional, in the dashboard's own Settings panel) — only needed if she wants the estimated-profit tiles; sales-only works with nothing entered.
 
-**What we build:** Vagaro webhook receiver + token API client (with CSV importer as fallback), Plaid integration, metric calculation.
-
-**Accuracy flag:** The Vagaro API is **per-account**. Because we scoped the dashboard to *Belinda only*, we just need *her* account's token — clean. We do **not** need the other 11 stylists' data (it isn't hers to pull, and each has a separate account). This keeps the dashboard far simpler than a multi-tenant version.
+**Accuracy flags:**
+- The Vagaro API is **per-account**. Because we scoped the dashboard to *Belinda only*, we just need *her* account's token — clean. We do **not** need the other 11 stylists' data.
+- Vagaro's exact API base URL / token endpoint / transactions endpoint aren't independently confirmed yet (`lib/vagaro.ts` has them as named constants flagged TO-VERIFY) — the first real connection attempt once creds arrive should be treated as a smoke test.
 
 ---
 

@@ -44,6 +44,39 @@ alter table messages  enable row level security;
 ```
 (We use the service_role key server-side only, so row-level security policies aren't required for these tables. Keep that key secret — never ship it to the browser.)
 
+## 2b. Migration — Belinda's sales ledger (Salon Dashboard)
+
+Run this once to add the `transactions` table the Salon Dashboard reads/writes
+(`lib/transactions.ts`). Every sale — however it arrives (CSV import today,
+Vagaro webhook/API once creds land) — normalizes into one row here, upserted
+by a deterministic `id` so re-imports and webhook retries never double-count.
+
+```sql
+create table if not exists transactions (
+  id                   text primary key,
+  external_id          text,
+  source               text not null,      -- 'vagaro-webhook' | 'vagaro-api' | 'csv'
+  date                 date not null,
+  gross                numeric not null,    -- refunds are negative
+  tip                  numeric not null default 0,
+  item_name            text,
+  category             text,
+  purchase_type        text,
+  customer_id          text,
+  service_provider_id  text,
+  appointment_id       text,
+  imported_at          timestamptz not null default now()
+);
+create index if not exists transactions_date_idx on transactions (date);
+
+alter table transactions enable row level security;
+```
+
+Without this table, `POST /api/dashboard/import` and the Vagaro transaction
+webhook both fail loudly (not silently) — `lib/transactions.ts` throws a clear
+"run the migration" error instead of quietly losing sales data to the local
+`.data/` fallback in production.
+
 ## 3. Create a public Storage bucket (for post images)
 Supabase → Storage → New bucket:
 - Name: **`post-media`** (or set `SUPABASE_BUCKET` to your name)
