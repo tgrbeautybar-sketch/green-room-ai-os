@@ -105,7 +105,7 @@ What it actually takes to move each module from **demo** to **real**, and exactl
 | Piece | Provider | Status | Notes |
 |---|---|---|---|
 | Scheduling | Vercel Cron (`app/api/cron/rent-cycle`) | 🟢 | Runs daily; the route itself only acts on Fridays/Mondays (New York time) — the schedule doesn't need day-of-week cron syntax. |
-| Auth | Shared secret (`CRON_SECRET`) | 🟡 | **Must be set on Vercel before go-live.** Without it, the route fails closed (401) in production — reminders simply won't run, which is safe but silent. In dev, an unset secret is allowed through. |
+| Auth | Shared secret (`CRON_SECRET`) | ✅ | **Set on Vercel 2026-07-10.** Without it, the route fails closed (401) in production — reminders simply won't run, which is safe but silent. In dev, an unset secret is allowed through. |
 | Sending | Same Gmail App Password as the manual "Email reminder" button | 🟢 | If Gmail isn't configured, the toggle still works but reminders can't send — the card says so plainly instead of pretending to have sent them. |
 | Default state | Off | 🟢 | Nothing emails anyone until Belinda flips it on in Rent Roll. |
 
