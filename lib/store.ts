@@ -90,7 +90,16 @@ export async function addMessage(msg: CapturedMessage): Promise<void> {
       // Tolerate the call_id column not existing yet on DBs that haven't run
       // the migration in docs/supabase-setup.md — retry once without it so
       // the message still gets captured instead of being lost.
-      if (/column .*call_id.* does not exist/i.test(error.message)) {
+      //
+      // PostgREST reports this as code PGRST204 with message "Could not find
+      // the 'call_id' column of 'messages' in the schema cache" — it does NOT
+      // say "does not exist", so match on the PGRST204 code too. Stay
+      // column-specific in the message check (must mention call_id) so an
+      // unrelated schema-cache error for some other column still throws.
+      const isMissingCallIdColumn =
+        error.code === "PGRST204" ||
+        /column[^.]*call_id[^.]*does not exist|could not find[^.]*call_id[^.]*column/i.test(error.message);
+      if (isMissingCallIdColumn) {
         delete row.call_id;
         const retry = await sb.from("messages").insert(row);
         if (retry.error) throw new Error(`addMessage: ${retry.error.message}`);
