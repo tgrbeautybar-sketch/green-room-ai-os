@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getState, setState } from "@/lib/store";
+import { safeGetState, setState } from "@/lib/store";
 
 export const runtime = "nodejs";
 
@@ -16,7 +16,9 @@ const DEFAULT: DataSource = { mode: "demo", fileName: null, rows: null, connecte
 const MODES: SourceMode[] = ["demo", "vagaro", "csv"];
 
 export async function GET() {
-  const s = await getState<DataSource>("dashboard-source");
+  // Never 500 here — if Supabase is unreachable, the dashboard just falls back
+  // to the demo data source instead of breaking the whole page.
+  const s = await safeGetState<DataSource | null>("dashboard-source", null);
   return NextResponse.json({ ...DEFAULT, ...(s ?? {}) });
 }
 

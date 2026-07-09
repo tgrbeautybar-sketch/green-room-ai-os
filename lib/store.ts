@@ -30,6 +30,18 @@ export async function getState<T>(key: string): Promise<T | null> {
   }
 }
 
+// Same as getState, but never throws — callers that would otherwise 500 when
+// Supabase is unreachable get `fallback` instead. Use for reads that must stay
+// on the happy path (e.g. GET routes backing UI that should degrade, not crash).
+export async function safeGetState<T>(key: string, fallback: T): Promise<T> {
+  try {
+    const value = await getState<T>(key);
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export async function setState<T>(key: string, value: T): Promise<void> {
   const sb = supabase();
   if (sb) {
