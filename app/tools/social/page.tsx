@@ -18,8 +18,12 @@ const NY_TZ = "America/New_York";
 type Draft = { caption: string; hashtags: string[]; cta: string; mode: "live" | "demo" };
 type When = "now" | "later";
 type PhotoNotice =
-  | { kind: "blocking" }
-  | { kind: "partial"; succeeded: number; total: number; mediaUrls: string[] };
+  | { kind: "none" } // Instagram is on but no photo was ever attached
+  | { kind: "blocking" } // a photo was attached but every upload failed
+  | { kind: "partial"; succeeded: number; total: number; mediaUrls: string[] }
+  | { kind: "caption" } // server rejected an empty caption
+  | { kind: "channel" } // server rejected with no channel selected
+  | { kind: "error" }; // network failure or an unrecognized server error
 type PostsData = { enabled: boolean; error?: string; posts: ZernioPost[] };
 
 // ---------- New York wall-clock time helpers (no new deps — Intl only) ----------
@@ -82,18 +86,28 @@ function platformLabel(p: string): string {
 
 // A post is "stuck" if it flat-out failed, or it's an Instagram post that's been
 // sitting pending with no media for 10+ minutes — Instagram always needs a photo,
-// so that combination means it will never actually publish on its own.
+// so that combination means it will never actually publish on its own. A post
+// scheduled for the future is never stuck, no matter how old or photo-less it
+// is right now — it still has time to get a photo before it's due, so it
+// belongs in Upcoming (with a warning), not Needs attention.
 function isStuck(p: ZernioPost): boolean {
   if (p.status === "failed") return true;
   if (p.status !== "pending") return false;
   if (p.mediaCount > 0) return false;
   if (!p.platforms.includes("instagram")) return false;
+  if (p.scheduledFor && new Date(p.scheduledFor).getTime() > Date.now()) return false;
   const ts = p.createdAt ?? p.scheduledFor;
   if (!ts) return false;
   return Date.now() - new Date(ts).getTime() > 10 * 60 * 1000;
 }
 
 const isDone = (p: ZernioPost) => p.status === "published" || p.status === "posted";
+
+// True for a pending Instagram post that still has no photo attached — surfaced
+// as a gentle inline warning on its Upcoming row rather than the Stuck treatment.
+function needsPhoto(p: ZernioPost): boolean {
+  return p.status === "pending" && p.mediaCount === 0 && p.platforms.includes("instagram");
+}
 
 export default function PostStudio() {
   const [type, setType] = useState<PostType>("brand");
@@ -150,9 +164,10 @@ export default function PostStudio() {
   // Keep the editable caption in sync with the latest draft
   useEffect(() => { setEditedCaption(draft.caption); }, [draft]);
 
-  // A photo notice reflects a specific upload attempt — once the channel or timing
-  // changes, that attempt is stale, so clear it rather than leave a mismatched notice up.
-  useEffect(() => { setPhotoNotice(null); }, [igOn, fbOn, when]);
+  // A photo notice reflects a specific publish attempt — once the channel, timing,
+  // or caption changes, that attempt is stale, so clear it rather than leave a
+  // mismatched notice up.
+  useEffect(() => { setPhotoNotice(null); }, [igOn, fbOn, when, editedCaption]);
 
   // Load the saved brand voice
   useEffect(() => {
@@ -238,6 +253,7 @@ export default function PostStudio() {
   }
 
   async function doPublish(mediaUrls: string[]) {
+    if (posting) return; // guard against a double-fire re-entering mid-publish
     setPosting(true);
     try {
       const scheduling = when === "later" && !!scheduledAt;
@@ -266,26 +282,41 @@ export default function PostStudio() {
         fetchPosts();
       } else {
         // Server caught something the client-side checks missed (e.g. a race) —
-        // same friendly notice either way, never the raw error string.
-        setPhotoNotice({ kind: "blocking" });
+        // map it to an honest, specific notice instead of always blaming the photo.
+        switch (data.error) {
+          case "empty caption":
+            setPhotoNotice({ kind: "caption" });
+            break;
+          case "pick a channel":
+            setPhotoNotice({ kind: "channel" });
+            break;
+          case "Instagram requires an image.":
+            setPhotoNotice({ kind: "blocking" });
+            break;
+          default:
+            setPhotoNotice({ kind: "error" });
+        }
       }
     } catch (err) {
       console.error(err);
+      setPhotoNotice({ kind: "error" });
     } finally {
       setPosting(false);
     }
   }
 
   async function schedule() {
+    if (posting) return; // guard against a double-fire re-entering mid-schedule
     setPhotoNotice(null);
     setPosting(true);
     const { mediaUrls, total, succeeded } = await uploadAll();
 
     if (igOn && succeeded === 0) {
-      // Either no photos were attached at all, or every one failed to host —
-      // Instagram can't post without media either way.
+      // Either no photos were attached at all, or some were attached but every
+      // one failed to host — those need different copy, since only the second
+      // one is worth retrying.
       setPosting(false);
-      setPhotoNotice({ kind: "blocking" });
+      setPhotoNotice(total === 0 ? { kind: "none" } : { kind: "blocking" });
       return;
     }
     if (igOn && succeeded < total) {
@@ -650,6 +681,25 @@ export default function PostStudio() {
             )}
           </div>
 
+          {photoNotice?.kind === "none" && (
+            <div role="alert" className="mt-4 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
+              <p className="font-semibold">Instagram needs a photo</p>
+              <p className="mt-1">
+                Instagram always needs a photo. Add one above, or switch to Facebook only.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setIgOn(false); setPhotoNotice(null); }}
+                  disabled={posting}
+                  className="rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Post to Facebook only
+                </button>
+              </div>
+            </div>
+          )}
+
           {photoNotice?.kind === "blocking" && (
             <div role="alert" className="mt-4 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
               <p className="font-semibold">Instagram needs a photo</p>
@@ -661,6 +711,7 @@ export default function PostStudio() {
                 <button
                   type="button"
                   onClick={() => schedule()}
+                  disabled={posting}
                   className="rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Try again
@@ -668,6 +719,7 @@ export default function PostStudio() {
                 <button
                   type="button"
                   onClick={() => { setIgOn(false); setPhotoNotice(null); }}
+                  disabled={posting}
                   className="rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Post to Facebook only
@@ -687,6 +739,7 @@ export default function PostStudio() {
                 <button
                   type="button"
                   onClick={() => { const mu = photoNotice.mediaUrls; setPhotoNotice(null); doPublish(mu); }}
+                  disabled={posting}
                   className="rounded-lg bg-moss-700 px-3 py-1.5 text-[12px] font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:cursor-not-allowed disabled:bg-moss-300"
                 >
                   Post with {photoNotice.succeeded} photo{photoNotice.succeeded === 1 ? "" : "s"}
@@ -694,7 +747,41 @@ export default function PostStudio() {
                 <button
                   type="button"
                   onClick={() => { setPhotoNotice(null); schedule(); }}
+                  disabled={posting}
                   className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Try again
+                </button>
+              </div>
+            </div>
+          )}
+
+          {photoNotice?.kind === "caption" && (
+            <div role="alert" className="mt-4 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
+              <p className="font-semibold">Add a caption</p>
+              <p className="mt-1">Write a caption before posting.</p>
+            </div>
+          )}
+
+          {photoNotice?.kind === "channel" && (
+            <div role="alert" className="mt-4 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
+              <p className="font-semibold">Pick a channel</p>
+              <p className="mt-1">Turn on Instagram or Facebook before posting.</p>
+            </div>
+          )}
+
+          {photoNotice?.kind === "error" && (
+            <div role="alert" className="mt-4 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]">
+              <p className="font-semibold">Something went wrong</p>
+              <p className="mt-1">
+                Something went wrong and this post didn't go out. Check your internet and try again.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => schedule()}
+                  disabled={posting}
+                  className="rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32] disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Try again
                 </button>
@@ -793,17 +880,24 @@ export default function PostStudio() {
                 <div className="text-[11px] uppercase tracking-[0.14em] text-muted">Upcoming</div>
                 <ul className="divide-y divide-moss-700/8">
                   {upcoming.map(p => (
-                    <li key={p.id} className="flex flex-wrap items-center gap-3 py-3">
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-champagne-400" />
-                      <span className="text-[13px] font-medium text-moss-700">
-                        {p.scheduledFor ? fmtNYDateTime(p.scheduledFor) : "—"}
-                      </span>
-                      <span className="max-w-[22rem] truncate text-[13px] text-muted">{p.content}</span>
-                      {p.platforms.map(pl => <Pill key={pl} tone="neutral">{platformLabel(pl)}</Pill>)}
-                      <span className="ml-auto flex items-center gap-2">
-                        <Pill tone="champagne">Scheduled</Pill>
-                        {removeControl(p.id)}
-                      </span>
+                    <li key={p.id} className="py-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="h-2 w-2 shrink-0 rounded-full bg-champagne-400" />
+                        <span className="text-[13px] font-medium text-moss-700">
+                          {p.scheduledFor ? fmtNYDateTime(p.scheduledFor) : "—"}
+                        </span>
+                        <span className="max-w-[22rem] truncate text-[13px] text-muted">{p.content}</span>
+                        {p.platforms.map(pl => <Pill key={pl} tone="neutral">{platformLabel(pl)}</Pill>)}
+                        <span className="ml-auto flex items-center gap-2">
+                          <Pill tone="champagne">Scheduled</Pill>
+                          {removeControl(p.id)}
+                        </span>
+                      </div>
+                      {needsPhoto(p) && (
+                        <p className="mt-1 pl-4 text-[12px] leading-relaxed text-champagne-600">
+                          This one has no photo yet — Instagram needs one to post.
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -822,9 +916,11 @@ export default function PostStudio() {
                       </span>
                       <span className="max-w-[22rem] truncate text-[13px] text-muted">{p.content}</span>
                       {p.platforms.map(pl => <Pill key={pl} tone="neutral">{platformLabel(pl)}</Pill>)}
-                      <span className="ml-auto flex items-center gap-2">
+                      {/* No Remove here — Zernio's DELETE semantics on a live published
+                          post are unverified, so we don't offer an action that could
+                          accidentally touch something already posted. */}
+                      <span className="ml-auto">
                         <Pill tone="moss">Posted ✓</Pill>
-                        {removeControl(p.id)}
                       </span>
                     </li>
                   ))}
