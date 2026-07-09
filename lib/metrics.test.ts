@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeMetrics, computeRent, MIN_IDENTIFIED_CUSTOMERS, type RentEntry, type RentPayment } from "./metrics";
+import { computeMetrics, computeRent, toDateOnly, MIN_IDENTIFIED_CUSTOMERS, type RentEntry, type RentPayment } from "./metrics";
 import type { NormalizedTxn } from "./transactions";
 
 function txn(overrides: Partial<NormalizedTxn> = {}): NormalizedTxn {
@@ -38,16 +38,27 @@ describe("computeMetrics", () => {
     expect(m.coverage.days).toBe(0);
   });
 
-  it("sums gross across txns, netting refund negatives", () => {
+  it("sums gross across txns, netting refund negatives, but only counts positive-gross rows as bookings (F-4)", () => {
     const txns = [
       txn({ date: "2026-07-08", gross: 150 }),
-      txn({ date: "2026-07-08", gross: -50 }), // refund
+      txn({ date: "2026-07-08", gross: -50 }), // refund — nets against gross, doesn't count as a booking
       txn({ date: "2026-07-09", gross: 80 }),
     ];
     const m = computeMetrics(txns, 7, { now: NOW });
     expect(m.gross).toBe(180);
-    expect(m.bookings).toBe(3);
-    expect(m.avgTicket).toBe(60); // 180 / 3
+    expect(m.bookings).toBe(2); // the refund row is excluded
+    expect(m.avgTicket).toBe(90); // 180 / 2
+  });
+
+  it("excludes refunds and zero-value rows from the bookings count entirely", () => {
+    const txns = [
+      txn({ date: "2026-07-09", gross: -30 }), // pure refund, no offsetting sale in window
+      txn({ date: "2026-07-09", gross: 0 }), // zero-value row
+    ];
+    const m = computeMetrics(txns, 7, { now: NOW });
+    expect(m.bookings).toBe(0);
+    expect(m.gross).toBe(-30);
+    expect(m.avgTicket).toBe(0); // guarded against NaN when bookings is 0 (EC-2)
   });
 
   it("excludes txns outside the requested window", () => {
@@ -81,6 +92,17 @@ describe("computeMetrics", () => {
 
     const empty = computeMetrics([], 7, { now: NOW });
     expect(empty.topService).toBeNull();
+  });
+
+  it("clamps topService.share to 100 even when refunds elsewhere shrink total gross below the top item's revenue", () => {
+    const txns = [
+      txn({ date: "2026-07-09", itemName: "Balayage", gross: 300 }),
+      txn({ date: "2026-07-09", itemName: "Refunded cut", gross: -250 }), // drags total gross down to 50
+    ];
+    const m = computeMetrics(txns, 7, { now: NOW });
+    expect(m.gross).toBe(50);
+    // Un-clamped this would be 600% (300 / 50) — must read as a real share.
+    expect(m.topService?.share).toBe(100);
   });
 
   it("computes repeat client rate only among identified (non-null customerId) customers", () => {
@@ -126,6 +148,25 @@ describe("computeMetrics", () => {
     expect(m.coverage.from).toBe("2026-07-08");
     expect(m.coverage.to).toBe("2026-07-09");
     expect(m.coverage.days).toBe(2);
+  });
+
+  it("derives 'today' from the salon's local calendar date (America/New_York), not UTC (EC-1)", () => {
+    // 2026-07-10T02:00:00Z is 10pm on July 9 in New York (EDT, UTC-4) — the
+    // old UTC-based toISOString() derivation would already treat this as
+    // July 10, silently excluding a same-evening sale from a 1-day window.
+    const lateEveningUtc = new Date("2026-07-10T02:00:00.000Z");
+    const txns = [txn({ date: "2026-07-09", gross: 40 })];
+    const m = computeMetrics(txns, 1, { now: lateEveningUtc });
+    expect(m.coverage.to).toBe("2026-07-09");
+    expect(m.gross).toBe(40);
+  });
+});
+
+describe("toDateOnly (salon-local calendar date, EC-1)", () => {
+  it("uses America/New_York rather than UTC across the UTC day boundary", () => {
+    expect(toDateOnly(new Date("2026-07-10T02:00:00.000Z"))).toBe("2026-07-09"); // 10pm ET Jul 9
+    expect(toDateOnly(new Date("2026-07-09T12:00:00.000Z"))).toBe("2026-07-09"); // 8am ET Jul 9
+    expect(toDateOnly(new Date("2026-01-01T04:30:00.000Z"))).toBe("2025-12-31"); // 11:30pm ET Dec 31 (EST, UTC-5)
   });
 });
 

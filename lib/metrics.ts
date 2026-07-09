@@ -34,8 +34,17 @@ export type MetricsOptions = {
 // show "not enough data yet" instead of a misleading percentage.
 export const MIN_IDENTIFIED_CUSTOMERS = 3;
 
-function toDateOnly(d: Date): string {
-  return d.toISOString().slice(0, 10);
+// Belinda's salon is in New York. Deriving "today" from d.toISOString() reads
+// the UTC calendar date, which rolls over to the next day at 8pm ET (EDT,
+// UTC-4) / 7pm EST — so anyone looking at the dashboard in the evening got a
+// window that silently excluded that day's sales so far (EC-1). Exported so
+// callers that need "today" outside computeMetrics (the API route, to build
+// the Supabase date-range query) use this exact same definition instead of
+// re-deriving their own and drifting out of sync.
+const SALON_TIMEZONE = "America/New_York";
+
+export function toDateOnly(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: SALON_TIMEZONE }).format(d); // en-CA formats as yyyy-mm-dd
 }
 
 function addDaysToDateStr(dateStr: string, delta: number): string {
@@ -58,7 +67,11 @@ export function computeMetrics(txns: NormalizedTxn[], window: number, options: M
   const inWindow = txns.filter(t => t.date >= from && t.date <= to);
 
   const gross = inWindow.reduce((sum, t) => sum + t.gross, 0);
-  const bookings = inWindow.length;
+  // Only rows with a positive gross are actual sales — refunds and zero-value
+  // rows aren't "a transaction that happened" from Belinda's point of view,
+  // so counting them inflated the tile (F-4). `gross` above still nets the
+  // refund out of the dollar total; this only changes what gets counted.
+  const bookings = inWindow.filter(t => t.gross > 0).length;
   const avgTicket = bookings > 0 ? Math.round(gross / bookings) : 0;
 
   const topService = computeTopService(inWindow, gross);
@@ -104,7 +117,10 @@ function computeTopService(txns: NormalizedTxn[], totalGross: number): TopServic
     }
   }
 
-  const share = totalGross !== 0 ? Math.round((topRev / totalGross) * 100) : 0;
+  // Clamped to 100: possible to exceed it when other items net negative
+  // (refunds) while the top item alone is larger than the window's total
+  // gross — "142% of sales" isn't a real share and would read as broken.
+  const share = totalGross !== 0 ? Math.min(100, Math.round((topRev / totalGross) * 100)) : 0;
   return { name: topName, share };
 }
 
