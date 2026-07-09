@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { phaseForToday, currentCycleId, classifyRenter, type RentCycle } from "./rent-cycle";
+import { phaseForToday, currentCycleId, classifyRenter, reminderCopyPhase, type RentCycle, type PhaseRecord } from "./rent-cycle";
 import type { RentEntry, VenmoMatch } from "./rent-match";
 
 function entry(overrides: Partial<RentEntry> = {}): RentEntry {
   return { id: "r_1", name: "Kharys Gomez", type: "chair", amount: 200, status: "unpaid", email: "k@example.com", ...overrides };
+}
+
+function phaseRecord(overrides: Partial<PhaseRecord> = {}): PhaseRecord {
+  return { ranAt: "x", remindedIds: [], scanOk: true, completed: true, ...overrides };
 }
 
 function match(overrides: Partial<VenmoMatch> = {}): VenmoMatch {
@@ -104,13 +108,13 @@ describe("classifyRenter — ordered skip matrix", () => {
 
   it("3. already in this phase's remindedIds is skipped even though it would otherwise send", () => {
     const e = entry({ id: "r_9" });
-    const cycle: RentCycle = { cycleId: "c", friday: { ranAt: "x", remindedIds: ["r_9"], scanOk: true } };
+    const cycle: RentCycle = { cycleId: "c", friday: phaseRecord({ remindedIds: ["r_9"], completed: false }) };
     expect(classifyRenter(e, undefined, cycle, "friday")).toEqual({ action: "skip" });
   });
 
   it("3b. remindedIds is scoped per phase — a Friday reminder doesn't skip the Monday follow-up", () => {
     const e = entry({ id: "r_9" });
-    const cycle: RentCycle = { cycleId: "c", friday: { ranAt: "x", remindedIds: ["r_9"], scanOk: true } };
+    const cycle: RentCycle = { cycleId: "c", friday: phaseRecord({ remindedIds: ["r_9"] }) };
     expect(classifyRenter(e, undefined, cycle, "monday")).toEqual({ action: "send", partial: false });
   });
 
@@ -118,6 +122,11 @@ describe("classifyRenter — ordered skip matrix", () => {
     const e = entry({ email: undefined, amount: 200 });
     const m = match({ detected: 50 });
     expect(classifyRenter(e, m, emptyCycle(), "friday")).toEqual({ action: "needsText" });
+  });
+
+  it("4b. a whitespace-only email is treated the same as no email on file", () => {
+    const e = entry({ email: "   ", amount: 200 });
+    expect(classifyRenter(e, undefined, emptyCycle(), "friday")).toEqual({ action: "needsText" });
   });
 
   it("5. partial Venmo payment (0 < detected < amount) sends with partial: true", () => {
@@ -129,5 +138,35 @@ describe("classifyRenter — ordered skip matrix", () => {
   it("6. no Venmo match at all sends the full reminder", () => {
     const e = entry({ amount: 200 });
     expect(classifyRenter(e, undefined, emptyCycle(), "friday")).toEqual({ action: "send", partial: false });
+  });
+});
+
+describe("reminderCopyPhase", () => {
+  it("Friday always gets the Friday first-touch copy", () => {
+    const e = entry();
+    expect(reminderCopyPhase(e, "friday", emptyCycle())).toBe("friday");
+  });
+
+  it("Monday gets the Monday follow-up copy when the renter was reminded Friday", () => {
+    const e = entry({ id: "r_9" });
+    const cycle: RentCycle = { cycleId: "c", friday: phaseRecord({ remindedIds: ["r_9"] }) };
+    expect(reminderCopyPhase(e, "monday", cycle)).toBe("monday");
+  });
+
+  it("Monday falls back to the Friday first-touch copy when Friday's scan failed (no remindedIds at all)", () => {
+    const e = entry({ id: "r_9" });
+    const cycle: RentCycle = { cycleId: "c", friday: phaseRecord({ scanOk: false, error: "boom" }) };
+    expect(reminderCopyPhase(e, "monday", cycle)).toBe("friday");
+  });
+
+  it("Monday falls back to the Friday first-touch copy when the renter was added over the weekend (no Friday record at all)", () => {
+    const e = entry({ id: "r_9" });
+    expect(reminderCopyPhase(e, "monday", emptyCycle())).toBe("friday");
+  });
+
+  it("Monday falls back to the Friday first-touch copy when this specific renter's Friday send failed", () => {
+    const e = entry({ id: "r_9" });
+    const cycle: RentCycle = { cycleId: "c", friday: phaseRecord({ remindedIds: ["r_1", "r_2"] }) };
+    expect(reminderCopyPhase(e, "monday", cycle)).toBe("friday");
   });
 });

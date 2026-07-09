@@ -40,6 +40,7 @@ describe("buildOwnerSummary", () => {
       detectedPaid: [{ entry: entry({ name: "Venmo Paid" }), detected: 200 }],
       partial: [{ entry: entry({ name: "Partial Payer", amount: 200 }), detected: 75 }],
       needsText: [entry({ name: "No Email", phone: "555-1234" })],
+      failed: [],
     });
 
     expect(subject).toContain("Friday reminder");
@@ -49,6 +50,7 @@ describe("buildOwnerSummary", () => {
     expect(text).toContain("Venmo Paid — $200 detected via Venmo");
     expect(text).toContain("Partial Payer — $75 of $200");
     expect(text).toContain("No Email — 555-1234");
+    expect(text).toContain("Couldn't send: none.");
     expect(text).toContain("Totals: 1 reminded, 2 already paid, 1 partial, 1 needs a text.");
   });
 
@@ -61,6 +63,7 @@ describe("buildOwnerSummary", () => {
       detectedPaid: [],
       partial: [],
       needsText: [],
+      failed: [],
     });
 
     expect(subject).toContain("Monday follow-up");
@@ -68,6 +71,7 @@ describe("buildOwnerSummary", () => {
     expect(text).toContain("Already paid: none.");
     expect(text).toContain("Paid partially: none.");
     expect(text).toContain("Needs a manual text: none.");
+    expect(text).toContain("Couldn't send: none.");
     expect(text).toContain("Totals: 0 reminded, 0 already paid, 0 partial, 0 needs a text.");
   });
 
@@ -80,7 +84,23 @@ describe("buildOwnerSummary", () => {
       detectedPaid: [],
       partial: [],
       needsText: [entry({ name: "Truly Unreachable", phone: undefined })],
+      failed: [],
     });
     expect(text).toContain("Truly Unreachable — no phone on file either");
+  });
+
+  it("names everyone a send failed for, even when every other section is empty — a run where all sends fail must never read like a quiet success", () => {
+    const { text } = buildOwnerSummary({
+      phase: "friday",
+      at: "2026-07-10T13:00:00.000Z",
+      reminded: [],
+      manuallyPaid: [],
+      detectedPaid: [],
+      partial: [],
+      needsText: [],
+      failed: [entry({ name: "Lapsed Creds Renter" })],
+    });
+    expect(text).toContain("Couldn't send (1):");
+    expect(text).toContain("Lapsed Creds Renter");
   });
 });

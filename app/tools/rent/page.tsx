@@ -55,6 +55,7 @@ type LastRun = {
   detectedPaid: number;
   partial: number;
   needsText: number;
+  sendFailed: number;
   scanOk: boolean;
   error?: string;
   automationOn: boolean;
@@ -528,12 +529,16 @@ function autoRemindStatusLine(autoRemind: boolean, lastRun: LastRun | null): { t
   if (alreadyPaid > 0) segments.push(`${alreadyPaid} already paid`);
   if (lastRun.partial > 0) segments.push(`${lastRun.partial} paid partially`);
   if (lastRun.needsText > 0) segments.push(`${lastRun.needsText} needs a text`);
+  // Sends can fail even when the Venmo scan itself succeeded (e.g. lapsed
+  // Gmail creds) — surface that count so a run where every send failed never
+  // reads as a quiet success.
+  if (lastRun.sendFailed > 0) segments.push(`${lastRun.sendFailed} couldn't send`);
 
   const timeStr = formatRunTime(lastRun.at);
   const prefix = timeStr ? `Auto-reminders ran ${timeStr}` : "Auto-reminders ran";
   const tail = segments.length > 0 ? segments.join(", ") : "everyone was already paid.";
   const text = segments.length > 0 ? `${prefix} — ${tail}.` : `${prefix} — ${tail}`;
-  return { tone: "muted", text };
+  return { tone: lastRun.sendFailed > 0 ? "warn" : "muted", text };
 }
 
 function AutoRemindCard() {

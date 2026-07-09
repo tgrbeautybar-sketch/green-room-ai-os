@@ -16,6 +16,13 @@ export type PhaseRecord = {
   ranAt: string;
   remindedIds: string[];
   scanOk: boolean;
+  // True once this phase has fully finished (or definitively failed to scan)
+  // for the week — the cron's phase-completed guard blocks on this, not on
+  // mere existence of the record. While a send loop is in progress this is
+  // false and remindedIds is persisted incrementally after every successful
+  // send, so a crash mid-loop leaves a resumable partial ledger instead of a
+  // phase that either re-sends everyone or is wrongly seen as done.
+  completed: boolean;
   error?: string;
 };
 
@@ -27,6 +34,7 @@ export type LastRun = {
   detectedPaid: number;
   partial: number;
   needsText: number;
+  sendFailed: number;
   scanOk: boolean;
   error?: string;
   automationOn: boolean;
@@ -126,9 +134,27 @@ export function classifyRenter(
   const remindedIds = cycle[phase]?.remindedIds ?? [];
   if (remindedIds.includes(entry.id)) return { action: "skip" };
 
-  if (!entry.email) return { action: "needsText" };
+  // Defensive: a whitespace-only email must count as "no email on file" even
+  // if one ever slipped through storage uncleaned — otherwise it passes this
+  // check but fails every send. lib/rent-roster's sanitizer trims on the way
+  // in, but classifyRenter stays correct even if a stale/unsanitized record
+  // ever makes it here.
+  if (!entry.email?.trim()) return { action: "needsText" };
 
   if (detected > 0) return { action: "send", partial: true };
 
   return { action: "send", partial: false };
+}
+
+// Monday's follow-up copy ("just circling back...") assumes the renter
+// already got Friday's first-touch reminder. That's false when Friday's scan
+// failed, Friday's send to them specifically failed, or they were added to
+// the roster over the weekend — in every one of those cases they never got a
+// first email, so Monday must send the FRIDAY (first-touch) copy instead.
+// Only the copy varies here; the phase used for classification/persistence
+// stays "monday" (see rent-cycle cron).
+export function reminderCopyPhase(entry: RentEntry, phase: CyclePhase, cycle: RentCycle): CyclePhase {
+  if (phase !== "monday") return phase;
+  const remindedFriday = cycle.friday?.remindedIds.includes(entry.id) ?? false;
+  return remindedFriday ? "monday" : "friday";
 }

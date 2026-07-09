@@ -8,6 +8,7 @@ import {
   getCycle,
   saveCycle,
   classifyRenter,
+  reminderCopyPhase,
   type RentCycle,
   type CyclePhase,
   type SendMode,
@@ -51,6 +52,7 @@ function baseLastRun(phase: CyclePhase, sendMode: SendMode, at: string): LastRun
     detectedPaid: 0,
     partial: 0,
     needsText: 0,
+    sendFailed: 0,
     scanOk: true,
     automationOn: true,
     sendMode,
@@ -65,7 +67,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const automation = await getState<AutomationState>("rent-automation");
+  // Every read below is wrapped: a Supabase blip must degrade gracefully
+  // (skip / treat-as-fresh / treat-as-empty), not 500 the cron and break the
+  // "always 200 after auth" contract. All reads happen before any email is
+  // sent, so a storage outage is caught up front rather than after emails
+  // have already gone out.
+  let automation: AutomationState | null;
+  try {
+    automation = await getState<AutomationState>("rent-automation");
+  } catch (err) {
+    console.error("rent-cycle cron: automation-toggle read failed; treating as off", err);
+    automation = null;
+  }
   if (!automation?.autoRemind) {
     // Fully inert when off — don't touch lastRun, so the Rent Roll card keeps
     // showing whatever the last real (automation-on) run reported.
@@ -78,25 +91,54 @@ export async function GET(req: NextRequest) {
   }
 
   const cycleId = currentCycleId();
-  let cycle: RentCycle = (await getCycle()) ?? { cycleId };
+  let cycle: RentCycle;
+  try {
+    cycle = (await getCycle()) ?? { cycleId };
+  } catch (err) {
+    console.error("rent-cycle cron: cycle read failed; treating as a fresh cycle", err);
+    cycle = { cycleId };
+    // Storage may be down for both reads and writes — prove we can still
+    // write BEFORE attempting any sends. Otherwise the incremental per-send
+    // persistence below would fail mid-loop, which is worse than not
+    // sending at all: a crash there means duplicate emails on the next run.
+    try {
+      await saveCycle(cycle);
+    } catch (saveErr) {
+      console.error("rent-cycle cron: storage unavailable for both read and write — aborting before any sends", saveErr);
+      await sendAlert({
+        subject: "Rent auto-remind — storage unavailable",
+        text: "Couldn't reach storage this morning — no reminders were sent automatically. Open Rent Roll to review manually.",
+      }).catch(alertErr => console.error("rent-cycle cron: owner alert failed", alertErr));
+      return NextResponse.json({ ok: true, storageOk: false });
+    }
+  }
   if (cycle.cycleId !== cycleId) {
     // New week's cycle — reset the phase records, but keep lastRun so the
     // status line still reflects the previous real run across the reset.
     cycle = { cycleId, lastRun: cycle.lastRun };
   }
 
-  if (cycle[phase]) {
+  // Guard on completed===true, not mere existence — an in-progress phase
+  // (crashed mid-send-loop, remindedIds partially persisted) must be allowed
+  // to resume, not be mistaken for done.
+  if (cycle[phase]?.completed) {
     return NextResponse.json({ ok: true, skipped: "phase-completed" });
   }
 
-  const roster = await getState<{ entries: RentEntry[] }>("rent-roster");
-  const entries = roster?.entries ?? [];
+  let entries: RentEntry[];
+  try {
+    const roster = await getState<{ entries: RentEntry[] }>("rent-roster");
+    entries = roster?.entries ?? [];
+  } catch (err) {
+    console.error("rent-cycle cron: roster read failed; treating as an empty roster", err);
+    entries = [];
+  }
   const sendMode: SendMode = emailSendEnabled ? "live" : "disabled";
   const nowIso = new Date().toISOString();
 
   const scan = await scanPersistMatch(entries);
   if (!scan.scanOk) {
-    cycle[phase] = { ranAt: nowIso, remindedIds: [], scanOk: false, error: scan.error };
+    cycle[phase] = { ranAt: nowIso, remindedIds: [], scanOk: false, error: scan.error, completed: true };
     cycle.lastRun = { ...baseLastRun(phase, sendMode, nowIso), scanOk: false, error: scan.error };
     await saveCycle(cycle);
     await sendAlert({
@@ -125,30 +167,51 @@ export async function GET(req: NextRequest) {
     // "skip" — already reminded this phase (defensive re-run guard); no bucket, no action.
   }
 
-  const remindedIds: string[] = [];
+  // Carry forward any remindedIds already persisted by a crashed prior
+  // attempt at this same phase — classifyRenter above already used them to
+  // keep those renters out of the candidate buckets, so this just makes sure
+  // we don't overwrite that record with a shorter list.
+  const remindedIds: string[] = [...(cycle[phase]?.remindedIds ?? [])];
   const reminded: RentEntry[] = [];
+  const failed: RentEntry[] = [];
 
   if (sendMode === "live") {
     for (const entry of fullCandidates) {
       try {
-        await sendEmail({ to: entry.email!, subject: "Rent reminder — The Green Room", text: reminderText(entry, phase) });
+        await sendEmail({
+          to: entry.email!,
+          subject: "Rent reminder — The Green Room",
+          text: reminderText(entry, reminderCopyPhase(entry, phase, cycle)),
+        });
         remindedIds.push(entry.id);
         reminded.push(entry);
+        // Persist after EVERY successful send — a crash mid-loop must never
+        // re-email someone who already got their reminder on re-invocation.
+        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
+        await saveCycle(cycle);
       } catch (err) {
         console.error(`rent-cycle cron: reminder send failed for renter ${entry.id}`, err);
+        failed.push(entry);
       }
     }
     for (const p of partialCandidates) {
       try {
-        await sendEmail({ to: p.entry.email!, subject: "Rent reminder — The Green Room", text: reminderText(p.entry, phase) });
+        await sendEmail({
+          to: p.entry.email!,
+          subject: "Rent reminder — The Green Room",
+          text: reminderText(p.entry, reminderCopyPhase(p.entry, phase, cycle)),
+        });
         remindedIds.push(p.entry.id);
+        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
+        await saveCycle(cycle);
       } catch (err) {
         console.error(`rent-cycle cron: partial reminder send failed for renter ${p.entry.id}`, err);
+        failed.push(p.entry);
       }
     }
   }
 
-  cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true };
+  cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: true };
   cycle.lastRun = {
     at: nowIso,
     phase,
@@ -157,6 +220,7 @@ export async function GET(req: NextRequest) {
     detectedPaid: detectedPaid.length,
     partial: partialCandidates.length,
     needsText: needsText.length,
+    sendFailed: failed.length,
     scanOk: true,
     automationOn: true,
     sendMode,
@@ -172,6 +236,7 @@ export async function GET(req: NextRequest) {
       detectedPaid,
       partial: partialCandidates,
       needsText,
+      failed,
     });
     await sendAlert(summary).catch(err => console.error("rent-cycle cron: owner summary alert failed", err));
   }

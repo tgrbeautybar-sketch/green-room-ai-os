@@ -31,6 +31,7 @@ export type OwnerSummaryInput = {
   detectedPaid: { entry: RentEntry; detected: number }[];
   partial: { entry: RentEntry; detected: number }[];
   needsText: RentEntry[];
+  failed: RentEntry[];
 };
 
 function formatRunTimestamp(iso: string): string {
@@ -73,6 +74,12 @@ export function buildOwnerSummary(input: OwnerSummaryInput): { subject: string; 
 
   lines.push(input.needsText.length > 0 ? "Needs a manual text (no email on file):" : "Needs a manual text: none.");
   for (const e of input.needsText) lines.push(`  • ${e.name} — ${e.phone || "no phone on file either"}`);
+  lines.push("");
+
+  // A run where sends fail (e.g. lapsed Gmail creds) must never read like a
+  // quiet success — call it out by name, not just a buried count.
+  lines.push(input.failed.length > 0 ? `Couldn't send (${input.failed.length}):` : "Couldn't send: none.");
+  for (const e of input.failed) lines.push(`  • ${e.name}`);
   lines.push("");
 
   lines.push(
