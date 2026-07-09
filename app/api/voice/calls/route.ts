@@ -12,15 +12,17 @@ export async function GET(req: NextRequest) {
   }
 
   const raw = Number(req.nextUrl.searchParams.get("limit"));
-  const limit = Number.isFinite(raw) && raw > 0 ? Math.min(Math.floor(raw), 50) : 20;
+  const limit = Number.isFinite(raw) && raw > 0 ? Math.max(1, Math.min(Math.floor(raw), 50)) : 20;
 
   try {
     const calls = await listCalls(limit);
     return NextResponse.json({ enabled: true, calls });
   } catch (err) {
-    return NextResponse.json(
-      { enabled: true, error: err instanceof Error ? err.message : String(err), calls: [] },
-      { status: 200 }
-    );
+    // Log the real error server-side only — the browser gets a generic token
+    // so we never ship upstream error text (which can include Retell request
+    // details) to the client. The page already renders friendly copy for any
+    // `error` value regardless of what it says.
+    console.error("GET /api/voice/calls:", err);
+    return NextResponse.json({ enabled: true, error: "calls_unavailable", calls: [] }, { status: 200 });
   }
 }
