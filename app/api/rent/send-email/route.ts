@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendEmail } from "@/lib/email";
+import { reminderText } from "@/lib/rent-email";
 
 export const runtime = "nodejs";
 
@@ -18,9 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "recipient email required" }, { status: 400 });
   }
 
-  const first = (body.name ?? "").split(" ")[0] || "there";
-  const amount = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(body.amount ?? 0);
-  const text = `Hi ${first}! Friendly reminder that your ${body.type ?? "space"} rent of ${amount} is due. Thank you so much! — Belinda`;
+  const text = reminderText({ name: body.name ?? "", type: body.type ?? "space", amount: body.amount ?? 0 }, "friday");
 
   try {
     const result = await sendEmail({ to: body.to, subject: "Rent reminder — The Green Room", text });

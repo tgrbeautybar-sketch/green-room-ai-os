@@ -13,7 +13,8 @@ function isPublic(pathname: string): boolean {
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/hooks") ||
     pathname.startsWith("/api/media") || // public so Instagram/Zernio can fetch post images
-    pathname === "/api/health" // public so Vercel Cron can ping it to keep Supabase warm
+    pathname === "/api/health" || // public so Vercel Cron can ping it to keep Supabase warm
+    pathname === "/api/cron/rent-cycle" // public so Vercel Cron can trigger it — secures itself with CRON_SECRET; exact-match so any future /api/cron/* route isn't public by default
   );
 }
 

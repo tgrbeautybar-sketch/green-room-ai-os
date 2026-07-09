@@ -43,6 +43,26 @@ type VenmoMatch = {
 type Unmatched = { payer: string; amount: number; date: string };
 type CheckResult = { enabled: boolean; error?: string; matches: VenmoMatch[]; unmatched?: Unmatched[] };
 
+// Mirrors lib/rent-cycle.ts's LastRun — kept as a local type (not imported)
+// since that module transitively pulls in lib/store.ts's "server-only" guard,
+// and this page is a client component. Keep the two in sync if either changes.
+type CyclePhase = "friday" | "monday";
+type LastRun = {
+  at: string;
+  phase: CyclePhase;
+  reminded: number;
+  manuallyPaid: number;
+  detectedPaid: number;
+  partial: number;
+  needsText: number;
+  sendFailed: number;
+  scanOk: boolean;
+  error?: string;
+  automationOn: boolean;
+  sendMode: "live" | "disabled";
+};
+type AutomationResponse = { autoRemind: boolean; lastRun: LastRun | null };
+
 export default function RentRollPage() {
   const [entries, setEntries] = useState<RentEntry[]>([]);
   const [baseline, setBaseline] = useState("[]");
@@ -199,6 +219,8 @@ export default function RentRollPage() {
           )}
         </div>
       </header>
+
+      <AutoRemindCard />
 
       {check && (
         <Card>
@@ -448,6 +470,248 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
       <div className="text-[11px] uppercase tracking-[0.14em] text-muted">{label}</div>
       <div className="mt-1 font-display text-2xl font-semibold text-moss-700">{value}</div>
       {sub && <div className="mt-0.5 text-[11px] text-muted">{sub}</div>}
+    </Card>
+  );
+}
+
+// ---------- Auto-remind card ----------
+
+// "Fri Jul 10, 9:02am" — NY time, lowercase meridiem with no space. Returns
+// null on an invalid timestamp so the caller can drop the time segment
+// entirely rather than show "Invalid Date".
+function formatRunTime(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(d);
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? "";
+  const weekday = get("weekday");
+  const month = get("month");
+  const day = get("day");
+  const hour = get("hour");
+  const minute = get("minute");
+  const meridiem = get("dayPeriod").toLowerCase().replace(/[.\s]/g, "");
+  if (!weekday || !month || !day || !hour || !minute || !meridiem) return null;
+  return `${weekday} ${month} ${day}, ${hour}:${minute}${meridiem}`;
+}
+
+function autoRemindStatusLine(autoRemind: boolean, lastRun: LastRun | null): { tone: "muted" | "warn"; text: string } | null {
+  // (A) Never run with automation on, or the toggle wasn't on for the last recorded run.
+  if (!lastRun || lastRun.automationOn === false) {
+    if (!autoRemind) return null;
+    return { tone: "muted", text: "Hasn't run yet — first run is next Friday morning." };
+  }
+
+  // (B1) Email sending isn't configured at all — nothing could have gone out.
+  if (lastRun.sendMode === "disabled") {
+    return { tone: "muted", text: "Email sending isn't set up yet, so reminders can't go out." };
+  }
+
+  // (B2) The Venmo scan itself failed last run — no reminders were attempted.
+  if (lastRun.scanOk === false) {
+    return {
+      tone: "warn",
+      text: "Couldn't check Venmo payments last run — no reminders were sent. You can remind manually below.",
+    };
+  }
+
+  // (B3) A normal completed run — summarize counts, dropping any that are zero.
+  const segments: string[] = [];
+  if (lastRun.reminded > 0) segments.push(`${lastRun.reminded} reminded`);
+  const alreadyPaid = lastRun.detectedPaid + lastRun.manuallyPaid;
+  if (alreadyPaid > 0) segments.push(`${alreadyPaid} already paid`);
+  if (lastRun.partial > 0) segments.push(`${lastRun.partial} paid partially`);
+  if (lastRun.needsText > 0) segments.push(`${lastRun.needsText} needs a text`);
+  // Sends can fail even when the Venmo scan itself succeeded (e.g. lapsed
+  // Gmail creds) — surface that count so a run where every send failed never
+  // reads as a quiet success.
+  if (lastRun.sendFailed > 0) segments.push(`${lastRun.sendFailed} couldn't send`);
+
+  const timeStr = formatRunTime(lastRun.at);
+  const prefix = timeStr ? `Auto-reminders ran ${timeStr}` : "Auto-reminders ran";
+  const tail = segments.length > 0 ? segments.join(", ") : "everyone was already paid.";
+  const text = segments.length > 0 ? `${prefix} — ${tail}.` : `${prefix} — ${tail}`;
+  return { tone: lastRun.sendFailed > 0 ? "warn" : "muted", text };
+}
+
+function AutoRemindCard() {
+  const [autoRemind, setAutoRemind] = useState(false);
+  const [lastRun, setLastRun] = useState<LastRun | null>(null);
+  const [autoLoaded, setAutoLoaded] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [pendingValue, setPendingValue] = useState<boolean | null>(null);
+  const [savingAuto, setSavingAuto] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/rent/automation")
+      .then(async r => {
+        if (!r.ok) throw new Error(`status ${r.status}`);
+        const d = (await r.json()) as AutomationResponse;
+        setAutoRemind(!!d.autoRemind);
+        setLastRun(d.lastRun ?? null);
+      })
+      .catch(() => {
+        // Never crash the page over this — just render as OFF, same as a brand-new install.
+        setAutoRemind(false);
+        setLastRun(null);
+      })
+      .finally(() => setAutoLoaded(true));
+  }, []);
+
+  async function persistAutomation(value: boolean) {
+    setPendingValue(value);
+    setSavingAuto(true);
+    setSaveError(false);
+    try {
+      const res = await fetch("/api/rent/automation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoRemind: value }),
+      });
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const d = (await res.json()) as AutomationResponse;
+      setAutoRemind(!!d.autoRemind);
+      setLastRun(d.lastRun ?? null);
+      setConfirming(false);
+      setPendingValue(null);
+    } catch {
+      setSaveError(true);
+    } finally {
+      setSavingAuto(false);
+    }
+  }
+
+  function onToggleClick() {
+    if (autoRemind) {
+      // Turning off needs no confirmation — it's the safe direction.
+      persistAutomation(false);
+    } else {
+      // Turning on is confirm-then-flip: the switch itself stays OFF until confirmed.
+      setSaveError(false);
+      setConfirming(true);
+    }
+  }
+
+  if (!autoLoaded) return <AutoRemindCardSkeleton />;
+
+  const statusLine = autoRemindStatusLine(autoRemind, lastRun);
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-[16rem] grow">
+          <div className="flex items-center gap-2">
+            <h3 className="font-display text-lg font-semibold text-moss-700">Auto-remind unpaid renters</h3>
+            <Pill tone={autoRemind ? "moss" : "neutral"}>{autoRemind ? "On" : "Off"}</Pill>
+          </div>
+          <p className="mt-1 max-w-md text-[13px] leading-relaxed text-muted">
+            Automatically email unpaid renters Friday &amp; Monday mornings from your Gmail.
+          </p>
+          {statusLine && (
+            statusLine.tone === "warn" ? (
+              <p className="mt-1 text-[13px] leading-relaxed text-[#9a4a32]">
+                <span aria-hidden="true">⚠ </span>
+                {statusLine.text}
+              </p>
+            ) : (
+              <p className="mt-1 text-[13px] leading-relaxed text-muted">{statusLine.text}</p>
+            )
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          {savingAuto && <span className="text-[11px] text-muted">Saving…</span>}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoRemind}
+            aria-label="Auto-remind unpaid renters"
+            onClick={onToggleClick}
+            disabled={savingAuto}
+            className={[
+              "relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-moss-500 focus-visible:ring-offset-2 disabled:opacity-60",
+              autoRemind ? "bg-moss-600" : "bg-moss-200",
+            ].join(" ")}
+          >
+            <span
+              className={[
+                "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition",
+                autoRemind ? "left-5" : "left-0.5",
+              ].join(" ")}
+            />
+          </button>
+        </div>
+      </div>
+
+      {confirming && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-moss-700/12 bg-cream/60 px-4 py-3">
+          <span className="text-[13px] text-moss-700">
+            This will email your unpaid renters every Friday &amp; Monday morning.
+          </span>
+          <button
+            type="button"
+            onClick={() => persistAutomation(true)}
+            disabled={savingAuto}
+            className="rounded-lg bg-moss-700 px-4 py-2 text-[13px] font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
+          >
+            {savingAuto ? "Turning on…" : "Turn on"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConfirming(false);
+              setSaveError(false);
+            }}
+            disabled={savingAuto}
+            className="text-[13px] text-muted transition hover:text-moss-700 disabled:opacity-60"
+          >
+            Not now
+          </button>
+        </div>
+      )}
+
+      {saveError && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]"
+        >
+          <p>Couldn't save that just now — your renters weren't affected. Please try again.</p>
+          <button
+            type="button"
+            onClick={() => {
+              if (pendingValue !== null) persistAutomation(pendingValue);
+            }}
+            className="mt-2 rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32]"
+          >
+            Try again
+          </button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AutoRemindCardSkeleton() {
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-[16rem] grow space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="h-5 w-48 animate-pulse rounded bg-moss-100/70" />
+            <div className="h-4 w-10 animate-pulse rounded-full bg-moss-100/70" />
+          </div>
+          <div className="h-3.5 w-72 animate-pulse rounded bg-moss-100/50" />
+        </div>
+        <div className="h-6 w-11 shrink-0 animate-pulse rounded-full bg-moss-100/70" />
+      </div>
     </Card>
   );
 }
