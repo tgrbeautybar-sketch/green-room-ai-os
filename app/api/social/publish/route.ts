@@ -14,7 +14,15 @@ export async function POST(req: NextRequest) {
     mediaUrls?: string[];
   };
 
-  const caption = [body.content ?? "", (body.hashtags ?? []).join(" ")]
+  // The draft caption and its hashtags are normally separate fields, but a
+  // live-AI draft (or a hand-edited caption) could already contain one of the
+  // hashtags inline — skip appending any hashtag already present in the
+  // content so it doesn't show up twice in the published post.
+  const content = body.content ?? "";
+  const contentLower = content.toLowerCase();
+  const newHashtags = (body.hashtags ?? []).filter(h => !contentLower.includes(h.toLowerCase()));
+
+  const caption = [content, newHashtags.join(" ")]
     .filter(s => s.trim().length > 0)
     .join("\n\n")
     .trim();
