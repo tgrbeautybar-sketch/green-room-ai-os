@@ -4,18 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
 import type { RetellCall } from "@/lib/retell";
-
-type CapturedMsg = {
-  id: string;
-  type: "message" | "booking";
-  callerName: string;
-  phone: string;
-  service: string;
-  preferredStylist: string;
-  note: string;
-  receivedAt: string;
-  callId?: string;
-};
+import type { CapturedMessage } from "@/lib/store";
 
 type CallsData = { enabled: boolean; error?: string; calls: RetellCall[] };
 
@@ -33,6 +22,15 @@ function formatPhone(raw: string | null | undefined): string {
   return raw || "Unknown caller";
 }
 
+// Fixed-timezone Intl formatters used by relativeCallTime — constant for the
+// life of the module, so build once instead of on every call/render.
+const CALL_DAY_FMT = new Intl.DateTimeFormat("en-US", { timeZone: NY_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+const CALL_TIME_FMT = new Intl.DateTimeFormat("en-US", { timeZone: NY_TZ, hour: "numeric", minute: "2-digit", hour12: true });
+const CALL_WEEKDAY_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: NY_TZ,
+  weekday: "short", month: "short", day: "numeric",
+});
+
 // "Today 2:14 PM" / "Yesterday 4:30 PM" / "Mon Jul 7, 11:02 AM" — always as New
 // York wall-clock time via Intl, never a naive Date#toLocaleString.
 function relativeCallTime(iso: string | null): string {
@@ -40,21 +38,16 @@ function relativeCallTime(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
 
-  const dayFmt = new Intl.DateTimeFormat("en-US", { timeZone: NY_TZ, year: "numeric", month: "2-digit", day: "2-digit" });
-  const timeFmt = new Intl.DateTimeFormat("en-US", { timeZone: NY_TZ, hour: "numeric", minute: "2-digit", hour12: true });
-  const dateKey = (d: Date) => dayFmt.format(d);
+  const dateKey = (d: Date) => CALL_DAY_FMT.format(d);
 
   const now = new Date();
   const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-  const time = timeFmt.format(date);
+  const time = CALL_TIME_FMT.format(date);
 
   if (dateKey(date) === dateKey(now)) return `Today ${time}`;
   if (dateKey(date) === dateKey(yesterday)) return `Yesterday ${time}`;
 
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: NY_TZ,
-    weekday: "short", month: "short", day: "numeric",
-  }).formatToParts(date);
+  const parts = CALL_WEEKDAY_FMT.formatToParts(date);
   const get = (t: string) => parts.find(p => p.type === t)?.value ?? "";
   return `${get("weekday")} ${get("month")} ${get("day")}, ${time}`;
 }
@@ -107,7 +100,7 @@ function friendlyDisconnect(reason: string | null): string {
 }
 
 export default function VoiceAgent() {
-  const [messages, setMessages] = useState<CapturedMsg[]>([]);
+  const [messages, setMessages] = useState<CapturedMessage[]>([]);
   const [callsData, setCallsData] = useState<CallsData | null>(null);
   const [checkingCalls, setCheckingCalls] = useState(false);
   const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
@@ -115,7 +108,7 @@ export default function VoiceAgent() {
   useEffect(() => {
     fetch("/api/voice/messages").then(async r => {
       if (!r.ok) return;
-      const data = (await r.json()) as { messages: CapturedMsg[] };
+      const data = (await r.json()) as { messages: CapturedMessage[] };
       setMessages(Array.isArray(data.messages) ? data.messages : []);
     }).catch(() => {});
   }, []);
@@ -123,11 +116,19 @@ export default function VoiceAgent() {
   const fetchCalls = useCallback(async () => {
     setCheckingCalls(true);
     try {
-      const res = await fetch("/api/voice/calls");
+      // Fetch more than MAX_ROWS so the "showing your 30 most recent calls"
+      // truncation notice can actually engage once there are more than 30.
+      const res = await fetch("/api/voice/calls?limit=50");
       const data = (await res.json()) as { enabled: boolean; error?: string; calls?: RetellCall[] };
-      setCallsData({ enabled: data.enabled, error: data.error, calls: data.calls ?? [] });
+      if (data.error) {
+        // Keep whatever calls we already have on screen — an error refresh
+        // shouldn't blank out a list the user was already looking at.
+        setCallsData(prev => ({ enabled: data.enabled, error: data.error, calls: prev?.calls ?? data.calls ?? [] }));
+      } else {
+        setCallsData({ enabled: data.enabled, error: undefined, calls: data.calls ?? [] });
+      }
     } catch {
-      setCallsData({ enabled: true, error: "network", calls: [] });
+      setCallsData(prev => ({ enabled: true, error: "network", calls: prev?.calls ?? [] }));
     } finally {
       setCheckingCalls(false);
     }
@@ -215,7 +216,7 @@ export default function VoiceAgent() {
             title="Not turned on yet"
             description="Sage's call log turns on once her phone system is connected — one small key to add."
           />
-        ) : callsData.error ? (
+        ) : callsData.error && visibleCalls.length === 0 ? (
           <div role="alert" className="rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] text-[#9a4a32]">
             Couldn't load your calls right now. This is usually temporary — tap Refresh to try again.
           </div>
@@ -226,6 +227,11 @@ export default function VoiceAgent() {
           />
         ) : (
           <>
+            {callsData.error && (
+              <div role="alert" className="mb-3 rounded-xl border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] text-[#9a4a32]">
+                Couldn't refresh just now — showing the calls we last loaded. Tap Refresh to try again.
+              </div>
+            )}
             <ul className="divide-y divide-moss-700/8">
               {visibleCalls.map(call => (
                 <CallRow
@@ -268,7 +274,13 @@ function CallRow({
   const isEnded = call.status === "ended";
   const isError = call.status === "error";
   const dotClass = isEnded ? "bg-moss-500" : isError ? "bg-[#9a4a32]" : "bg-champagne-400";
-  const transcriptLines = parseTranscript(call.transcript);
+  // Only parse the transcript once a row is actually opened — most rows on a
+  // busy call log never get expanded, so there's no reason to pay for it
+  // upfront on every render.
+  const transcriptLines = useMemo(
+    () => (expanded ? parseTranscript(call.transcript) : []),
+    [expanded, call.transcript]
+  );
   const problem = isProblemDisconnect(call.disconnectionReason);
   const negativeSentiment = (call.sentiment ?? "").toLowerCase() === "negative";
 
