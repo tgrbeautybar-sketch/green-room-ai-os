@@ -185,13 +185,20 @@ export async function GET(req: NextRequest) {
         });
         remindedIds.push(entry.id);
         reminded.push(entry);
-        // Persist after EVERY successful send — a crash mid-loop must never
-        // re-email someone who already got their reminder on re-invocation.
-        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
-        await saveCycle(cycle);
       } catch (err) {
         console.error(`rent-cycle cron: reminder send failed for renter ${entry.id}`, err);
         failed.push(entry);
+        continue;
+      }
+      // Persist after EVERY successful send — a crash mid-loop must never
+      // re-email someone who already got their reminder on re-invocation.
+      // Kept OUTSIDE the send try/catch: a bookkeeping-write failure must not
+      // report an email that went out as "couldn't send".
+      try {
+        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
+        await saveCycle(cycle);
+      } catch (err) {
+        console.error(`rent-cycle cron: incremental save failed after sending to ${entry.id}`, err);
       }
     }
     for (const p of partialCandidates) {
@@ -202,15 +209,24 @@ export async function GET(req: NextRequest) {
           text: reminderText(p.entry, reminderCopyPhase(p.entry, phase, cycle)),
         });
         remindedIds.push(p.entry.id);
-        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
-        await saveCycle(cycle);
       } catch (err) {
         console.error(`rent-cycle cron: partial reminder send failed for renter ${p.entry.id}`, err);
         failed.push(p.entry);
+        continue;
+      }
+      try {
+        cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: false };
+        await saveCycle(cycle);
+      } catch (err) {
+        console.error(`rent-cycle cron: incremental save failed after sending to ${p.entry.id}`, err);
       }
     }
   }
 
+  // Final persist is best-effort too — the always-200 contract holds even if
+  // storage dies after the sends (the emails already went out; losing the
+  // completed flag only risks a benign no-op-heavy re-run, never a re-email
+  // of anyone recorded in an earlier successful incremental save).
   cycle[phase] = { ranAt: nowIso, remindedIds, scanOk: true, completed: true };
   cycle.lastRun = {
     at: nowIso,
@@ -225,7 +241,11 @@ export async function GET(req: NextRequest) {
     automationOn: true,
     sendMode,
   };
-  await saveCycle(cycle);
+  try {
+    await saveCycle(cycle);
+  } catch (err) {
+    console.error("rent-cycle cron: final save failed (sends already completed)", err);
+  }
 
   if (sendMode === "live") {
     const summary = buildOwnerSummary({
