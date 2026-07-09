@@ -16,6 +16,7 @@ type RentEntry = {
   note?: string;
   email?: string;
   phone?: string;
+  venmoName?: string; // set when the renter's Venmo display name differs from their roster name
 };
 type Roster = { entries: RentEntry[] };
 
@@ -41,6 +42,7 @@ export async function POST(req: NextRequest) {
     note: e.note ? String(e.note).slice(0, 200) : undefined,
     email: e.email ? String(e.email).slice(0, 200) : undefined,
     phone: e.phone ? String(e.phone).slice(0, 40) : undefined,
+    venmoName: e.venmoName ? String(e.venmoName).slice(0, 120) : undefined,
   }));
 
   await setState("rent-roster", { entries });

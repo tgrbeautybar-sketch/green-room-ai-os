@@ -5,7 +5,17 @@ import { Card, CardHead } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
 
 type RentType = "chair" | "room";
-type RentEntry = { id: string; name: string; type: RentType; amount: number; status: "paid" | "unpaid"; note?: string; email?: string; phone?: string };
+type RentEntry = {
+  id: string;
+  name: string;
+  type: RentType;
+  amount: number;
+  status: "paid" | "unpaid";
+  note?: string;
+  email?: string;
+  phone?: string;
+  venmoName?: string;
+};
 
 function reminderText(e: RentEntry) {
   const first = e.name.split(" ")[0] || e.name || "there";
@@ -374,6 +384,12 @@ export default function RentRollPage() {
                       onChange={ev => update(e.id, { phone: ev.target.value })}
                       placeholder="phone — for texts"
                       className="w-40 rounded-md border border-moss-700/12 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
+                    />
+                    <input
+                      value={e.venmoName ?? ""}
+                      onChange={ev => update(e.id, { venmoName: ev.target.value })}
+                      placeholder="Venmo name (if different)"
+                      className="w-48 rounded-md border border-moss-700/12 bg-white px-2 py-1 text-[12px] text-moss-700 outline-none focus:border-moss-500"
                     />
                   </div>
 

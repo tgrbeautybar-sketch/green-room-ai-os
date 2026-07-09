@@ -5,15 +5,41 @@ import { getState, setState } from "@/lib/store";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-type RentEntry = { id: string; name: string; type: string; amount: number; status: "paid" | "unpaid" };
+type RentEntry = {
+  id: string;
+  name: string;
+  type: string;
+  amount: number;
+  status: "paid" | "unpaid";
+  venmoName?: string;
+};
 
 const pkey = (p: VenmoPayment) => `${p.payer.toLowerCase()}|${p.amount}|${(p.date || "").slice(0, 10)}`;
 
-function nameMatch(payer: string, renter: string): boolean {
-  const p = payer.toLowerCase();
-  const r = renter.toLowerCase().trim();
-  if (!r) return false;
-  return p.includes(r) || r.includes(p.split(/\s+/)[0]);
+const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+// Precedence: if the renter has a Venmo display name on file, only an exact
+// (case/whitespace-insensitive) match on that counts — it's the ground truth they gave us.
+// Otherwise fall back to token equality on the roster name: first-name tokens must match,
+// and if both sides have a last-name token, that must match too (stronger confirmation,
+// avoids "John" matching every John on the roster).
+function nameMatch(payer: string, entry: { name: string; venmoName?: string }): boolean {
+  const p = norm(payer);
+  if (!p) return false;
+
+  if (entry.venmoName) return norm(entry.venmoName) === p;
+
+  const renter = norm(entry.name);
+  if (!renter) return false;
+
+  const pTokens = p.split(" ");
+  const rTokens = renter.split(" ");
+  if (pTokens[0] !== rTokens[0]) return false;
+
+  if (pTokens.length > 1 && rTokens.length > 1) {
+    return pTokens[pTokens.length - 1] === rTokens[rTokens.length - 1];
+  }
+  return true;
 }
 
 export async function GET() {
@@ -54,7 +80,7 @@ export async function GET() {
   const used = new Set<string>();
   const matches = entries
     .map(e => {
-      const ps = recent.filter(p => nameMatch(p.payer, e.name));
+      const ps = recent.filter(p => nameMatch(p.payer, e));
       ps.forEach(p => used.add(pkey(p)));
       const detected = ps.reduce((a, p) => a + p.amount, 0);
       return {
