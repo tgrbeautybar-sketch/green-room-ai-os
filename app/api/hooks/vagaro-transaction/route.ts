@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { timingSafeEqual } from "crypto";
 import { normalizeVagaroTransaction, type VagaroTransactionPayload } from "@/lib/vagaro";
 import { upsertTransactions } from "@/lib/transactions";
 
@@ -6,13 +7,25 @@ export const runtime = "nodejs";
 
 // Vagaro's Transaction webhook. Public route (exempted from auth in
 // proxy.ts's /api/hooks prefix — Vagaro can't carry Belinda's session
-// cookie), secured with a shared secret instead. Mirrors
-// app/api/hooks/voice-message/route.ts's auth pattern exactly.
+// cookie), secured with a shared secret instead. Unlike
+// app/api/hooks/voice-message/route.ts (which stays open with no secret —
+// Retell calls it today, closing it would break live message capture), this
+// route writes Belinda's sales ledger, so an unset secret must fail CLOSED in
+// production rather than open (C-1) — the "no secret = open" convenience is
+// dev-only, before Vagaro creds exist.
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false; // timingSafeEqual throws on length mismatch
+  return timingSafeEqual(a, b);
+}
+
 function authorized(req: NextRequest): boolean {
   const secret = process.env.VAGARO_WEBHOOK_SECRET;
-  if (!secret) return true; // no secret configured = open (dev)
+  if (!secret) return process.env.NODE_ENV !== "production"; // no secret = open in dev only
   const provided = req.headers.get("x-webhook-secret") ?? req.nextUrl.searchParams.get("key");
-  return provided === secret;
+  if (!provided) return false;
+  return secretsMatch(provided, secret);
 }
 
 export async function POST(req: NextRequest) {
