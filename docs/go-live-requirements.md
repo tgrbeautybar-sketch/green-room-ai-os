@@ -100,6 +100,17 @@ What it actually takes to move each module from **demo** to **real**, and exactl
 - Matching **Venmo/Zelle** deposits to a specific stylist is fuzzy (memo lines vary) — expect a "confirm this match" step rather than 100% auto.
 - **Twilio A2P 10DLC** (US business-texting registration) takes days–weeks and is required before SMS sends reliably. Start this early. ⏳
 
+**Auto-remind (email) — live today, off by default:** Rent Roll now has an "Auto-remind unpaid renters" toggle that, once turned on, emails everyone still unpaid every Friday morning and follows up Monday morning — no clicking required. It reuses the same Venmo detection Rent Roll already has, so anyone Venmo already caught (fully or partially) is reflected before reminders go out.
+
+| Piece | Provider | Status | Notes |
+|---|---|---|---|
+| Scheduling | Vercel Cron (`app/api/cron/rent-cycle`) | 🟢 | Runs daily; the route itself only acts on Fridays/Mondays (New York time) — the schedule doesn't need day-of-week cron syntax. |
+| Auth | Shared secret (`CRON_SECRET`) | 🟡 | **Must be set on Vercel before go-live.** Without it, the route fails closed (401) in production — reminders simply won't run, which is safe but silent. In dev, an unset secret is allowed through. |
+| Sending | Same Gmail App Password as the manual "Email reminder" button | 🟢 | If Gmail isn't configured, the toggle still works but reminders can't send — the card says so plainly instead of pretending to have sent them. |
+| Default state | Off | 🟢 | Nothing emails anyone until Belinda flips it on in Rent Roll. |
+
+**What we need from them:** nothing new — it rides on the Gmail App Password already set up for the manual reminder button. **What we need to do:** set `CRON_SECRET` (any long random string) as an env var on Vercel and register the same value as the cron's bearer token (Vercel sets this automatically for its own scheduled invocations when the env var exists — see `vercel.json`).
+
 ---
 
 ## Cross-Cutting (applies to the whole platform)
