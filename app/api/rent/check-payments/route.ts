@@ -27,7 +27,11 @@ function nameMatch(payer: string, entry: { name: string; venmoName?: string }): 
   const p = norm(payer);
   if (!p) return false;
 
-  if (entry.venmoName) return norm(entry.venmoName) === p;
+  // Defensive: even if a whitespace-only venmoName ever slipped through storage,
+  // don't let it win over the name-based fallback below — norm() would reduce it
+  // to "", which should never be treated as ground truth.
+  const venmoName = norm(entry.venmoName ?? "");
+  if (venmoName) return venmoName === p;
 
   const renter = norm(entry.name);
   if (!renter) return false;

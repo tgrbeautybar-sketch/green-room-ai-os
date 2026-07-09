@@ -33,17 +33,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "entries[] required" }, { status: 400 });
   }
 
-  const entries: RentEntry[] = body.entries.slice(0, 300).map(e => ({
-    id: String(e.id ?? "").slice(0, 48) || `r_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
-    name: String(e.name ?? "").slice(0, 120),
-    type: e.type === "room" ? "room" : "chair",
-    amount: Number.isFinite(e.amount) ? Math.max(0, Math.round(e.amount)) : 0,
-    status: e.status === "paid" ? "paid" : "unpaid",
-    note: e.note ? String(e.note).slice(0, 200) : undefined,
-    email: e.email ? String(e.email).slice(0, 200) : undefined,
-    phone: e.phone ? String(e.phone).slice(0, 40) : undefined,
-    venmoName: e.venmoName ? String(e.venmoName).slice(0, 120) : undefined,
-  }));
+  const entries: RentEntry[] = body.entries.slice(0, 300).map(e => {
+    // A venmoName that's whitespace-only (or trims to empty) must count as "not
+    // set" — otherwise it silently wins over the name-based fallback match in
+    // check-payments and no payment ever matches this renter again.
+    const venmoName = String(e.venmoName ?? "").trim();
+    return {
+      id: String(e.id ?? "").slice(0, 48) || `r_${Date.now()}_${Math.floor(Math.random() * 1e6)}`,
+      name: String(e.name ?? "").slice(0, 120),
+      type: e.type === "room" ? "room" : "chair",
+      amount: Number.isFinite(e.amount) ? Math.max(0, Math.round(e.amount)) : 0,
+      status: e.status === "paid" ? "paid" : "unpaid",
+      note: e.note ? String(e.note).slice(0, 200) : undefined,
+      email: e.email ? String(e.email).slice(0, 200) : undefined,
+      phone: e.phone ? String(e.phone).slice(0, 40) : undefined,
+      venmoName: venmoName ? venmoName.slice(0, 120) : undefined,
+    };
+  });
 
   await setState("rent-roster", { entries });
   return NextResponse.json({ ok: true, entries });
