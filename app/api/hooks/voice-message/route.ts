@@ -34,8 +34,15 @@ export async function POST(req: NextRequest) {
     receivedAt: new Date().toISOString(),
   };
 
-  // 1) Persist so nothing is ever lost.
-  await addMessage(msg);
+  // 1) Persist — but never let a storage outage swallow the message entirely:
+  // the email alert below is the durable fallback, so it must still send.
+  let stored = false;
+  try {
+    await addMessage(msg);
+    stored = true;
+  } catch (err) {
+    console.error("voice-message: store failed, falling back to email only", err);
+  }
 
   // 2) Notify Belinda by email (no-ops to demo if not configured).
   const heading = msg.type === "booking" ? "New booking request" : "New message";
@@ -56,5 +63,5 @@ export async function POST(req: NextRequest) {
     email = { mode: "error" as const, reason: err instanceof Error ? err.message : String(err) };
   }
 
-  return NextResponse.json({ ok: true, stored: msg.id, email });
+  return NextResponse.json({ ok: true, stored: stored ? msg.id : false, email });
 }
