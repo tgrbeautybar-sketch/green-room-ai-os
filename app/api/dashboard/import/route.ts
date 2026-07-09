@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseCsv, type CsvMapping } from "@/lib/csv-import";
-import { upsertTransactions, clearTransactions, listTransactions } from "@/lib/transactions";
+import { upsertTransactions, clearTransactions } from "@/lib/transactions";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -37,24 +37,12 @@ export async function POST(req: NextRequest) {
 
   const { rows, skipped } = parsed;
   if (rows.length === 0) {
-    return NextResponse.json({ ok: true, imported: 0, skipped, duplicates: 0, dateRange: null });
+    return NextResponse.json({ ok: true, imported: 0, skipped, dateRange: null });
   }
 
-  // Figure out which of these ids already existed before this import, so the
-  // response can distinguish "net new" from "re-imported, already had these."
-  let duplicates = 0;
   const dates = rows.map(r => r.date);
   const from = dates.reduce((min, d) => (d < min ? d : min));
   const to = dates.reduce((max, d) => (d > max ? d : max));
-
-  try {
-    const existing = await listTransactions(from, to);
-    const existingIds = new Set(existing.map(t => t.id));
-    duplicates = rows.filter(r => existingIds.has(r.id)).length;
-  } catch {
-    // Non-critical — if the existence check fails we still proceed with the
-    // upsert below; we just can't report an accurate duplicate count.
-  }
 
   try {
     await upsertTransactions(rows);
@@ -70,7 +58,6 @@ export async function POST(req: NextRequest) {
     ok: true,
     imported: rows.length,
     skipped,
-    duplicates,
     dateRange: { from, to },
   });
 }
