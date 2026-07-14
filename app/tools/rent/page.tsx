@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardHead } from "@/components/ui/Card";
 import { Pill } from "@/components/ui/Pill";
 
@@ -72,6 +72,18 @@ export default function RentRollPage() {
   const [checking, setChecking] = useState(false);
   const [check, setCheck] = useState<CheckResult | null>(null);
 
+  // "Start a new week" reset: flips everyone to unpaid + stamps a week marker.
+  const [weekStartedAt, setWeekStartedAt] = useState<string | null>(null);
+  const [resetConfirming, setResetConfirming] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(false);
+  const [resetDone, setResetDone] = useState(false); // transient, auto-clears
+
+  // Tracks the pending debounced auto-save timer so "Start new week" can flush
+  // it before resetting — otherwise a stale debounced save could re-write the
+  // pre-reset roster on top of the fresh one.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Add form
   const [addName, setAddName] = useState("");
   const [addType, setAddType] = useState<RentType>("chair");
@@ -80,19 +92,25 @@ export default function RentRollPage() {
   useEffect(() => {
     fetch("/api/rent/roster").then(async r => {
       if (!r.ok) return;
-      const d = (await r.json()) as { entries: RentEntry[] };
+      const d = (await r.json()) as { entries: RentEntry[]; weekStartedAt?: string | null };
       const es = Array.isArray(d.entries) ? d.entries : [];
       setEntries(es);
       setBaseline(JSON.stringify(es));
+      setWeekStartedAt(d.weekStartedAt ?? null);
     }).catch(() => {}).finally(() => setLoaded(true));
   }, []);
 
   // Auto-save: persist a moment after you stop editing (no Save button needed).
+  // The pending timer is mirrored into saveTimerRef so startNewWeek can flush it.
   useEffect(() => {
     if (!loaded) return;
     if (JSON.stringify(entries) === baseline) return;
     const t = setTimeout(() => { save(); }, 800);
-    return () => clearTimeout(t);
+    saveTimerRef.current = t;
+    return () => {
+      clearTimeout(t);
+      if (saveTimerRef.current === t) saveTimerRef.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, loaded, baseline]);
 
@@ -148,6 +166,42 @@ export default function RentRollPage() {
     }
   }
 
+  // "Start a new week": reset every renter to unpaid and stamp a fresh week
+  // marker. Flush any pending auto-save FIRST so the reset acts on the latest
+  // on-screen roster and no stale debounced write lands on top of the reset.
+  async function startNewWeek() {
+    setResetting(true);
+    setResetError(false);
+    try {
+      // Cancel the debounced auto-save timer, then flush the pending edits so
+      // the server's roster matches what's on screen before we reset it.
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      if (dirty) await save();
+
+      const res = await fetch("/api/rent/new-week", { method: "POST" });
+      const d = (await res.json()) as { ok: boolean; entries?: RentEntry[]; weekStartedAt?: string | null };
+      if (!res.ok || !d.ok || !Array.isArray(d.entries)) throw new Error("reset failed");
+
+      // Land entries + baseline together so the auto-save effect sees them
+      // equal and doesn't immediately re-fire, and Stats/Pills recompute in
+      // one render (Collected → $0, Outstanding → full, % → 0).
+      setEntries(d.entries);
+      setBaseline(JSON.stringify(d.entries));
+      setWeekStartedAt(d.weekStartedAt ?? null);
+      setResetConfirming(false);
+      setResetDone(true);
+      setTimeout(() => setResetDone(false), 2000);
+    } catch {
+      // Leave the confirm bar open so she can retry without re-triggering.
+      setResetError(true);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   function mailtoHref(e: RentEntry) {
     const subject = encodeURIComponent("Rent reminder — The Green Room");
     const body = encodeURIComponent(reminderText(e));
@@ -197,6 +251,16 @@ export default function RentRollPage() {
           >
             {checking ? "Checking…" : "↻ Check Venmo payments"}
           </button>
+          <button
+            type="button"
+            onClick={() => { setResetError(false); setResetConfirming(true); }}
+            disabled={resetting || resetConfirming}
+            aria-expanded={resetConfirming}
+            aria-controls="new-week-confirm"
+            className="rounded-lg border border-moss-700/15 bg-white px-3 py-1.5 text-[12px] font-medium text-moss-700 transition hover:border-moss-500 disabled:opacity-60"
+          >
+            Start new week
+          </button>
           {dirty && (
             <button
               onClick={() => { try { setEntries(JSON.parse(baseline)); } catch { /* noop */ } }}
@@ -214,11 +278,61 @@ export default function RentRollPage() {
             </button>
           ) : (
             <span className="rounded-lg border border-moss-700/10 bg-white px-3 py-1.5 text-[12px] text-muted">
-              {saveState === "saving" || dirty ? "Saving…" : "All changes saved ✓"}
+              {resetDone
+                ? "New week started ✓"
+                : saveState === "saving" || dirty
+                ? "Saving…"
+                : "All changes saved ✓"}
             </span>
           )}
         </div>
       </header>
+
+      {resetConfirming && (
+        <div
+          id="new-week-confirm"
+          role="group"
+          aria-label="Start a new rent week"
+          className="flex flex-wrap items-center gap-3 rounded-lg border border-moss-700/12 bg-cream/60 px-4 py-3"
+        >
+          <span className="min-w-[16rem] grow text-[13px] leading-relaxed text-moss-700">
+            Start a new rent week? This marks everyone unpaid so you&apos;re tracking this week fresh. Names, amounts and contacts all stay.
+          </span>
+          <button
+            type="button"
+            onClick={startNewWeek}
+            disabled={resetting}
+            className="rounded-lg bg-moss-700 px-4 py-2 text-[13px] font-medium text-cream shadow-sm transition hover:bg-moss-600 disabled:bg-moss-300"
+          >
+            {resetting ? "Starting…" : "Start new week"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setResetConfirming(false); setResetError(false); }}
+            disabled={resetting}
+            className="text-[13px] text-muted transition hover:text-moss-700 disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {resetError && (
+        <div
+          role="alert"
+          className="rounded-lg border border-[#f3cdbf] bg-[#fbe9e3]/50 px-4 py-3 text-[13px] leading-relaxed text-[#9a4a32]"
+        >
+          <p>Couldn&apos;t start a new week just now. Please try again.</p>
+          <button
+            type="button"
+            onClick={startNewWeek}
+            disabled={resetting}
+            className="mt-2 rounded-lg border border-[#f3cdbf] bg-white px-3 py-1.5 text-[12px] font-medium text-[#9a4a32] transition hover:border-[#9a4a32] disabled:opacity-60"
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
       <AutoRemindCard />
 
@@ -336,6 +450,11 @@ export default function RentRollPage() {
 
       <Card>
         <CardHead eyebrow="Roster" title={`${entries.length} renters`} />
+        {weekStartedAt && formatWeekStarted(weekStartedAt) && (
+          <p className="mb-3 text-[11px] uppercase tracking-[0.14em] text-muted">
+            Rent week started {formatWeekStarted(weekStartedAt)}
+          </p>
+        )}
         {entries.length === 0 ? (
           <div className="rounded-xl border border-dashed border-moss-700/15 bg-cream/50 px-4 py-8 text-center text-[13px] text-muted">
             No renters yet — add your chairs and rooms above.
@@ -479,6 +598,19 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 // "Fri Jul 10, 9:02am" — NY time, lowercase meridiem with no space. Returns
 // null on an invalid timestamp so the caller can drop the time segment
 // entirely rather than show "Invalid Date".
+// "Jul 17" — NY-time month + day the current rent week was started. Returns
+// null on an invalid/blank timestamp so the caller renders nothing rather than
+// "Invalid Date".
+function formatWeekStarted(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+  }).format(d);
+}
+
 function formatRunTime(iso: string): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
