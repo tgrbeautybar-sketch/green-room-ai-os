@@ -131,4 +131,29 @@ describe("POST /api/rent/new-week", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toContain("simulated write failure");
   });
+
+  it("returns ok:true and keeps the roster reset when only the marker write fails", async () => {
+    state.store.set("rent-roster", { entries: [renter({ status: "paid" })] });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // First setState (rent-roster) writes normally; force the SECOND setState
+    // (rent-week marker) to reject. The reset must still report success.
+    setStateMock
+      .mockImplementationOnce(async (key: string, value: unknown) => { state.store.set(key, value); })
+      .mockRejectedValueOnce(new Error("marker write failed"));
+
+    const res = await POST();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.entries[0].status).toBe("unpaid");
+    // Roster was reset and persisted despite the marker failure.
+    expect(state.store.get("rent-roster")).toEqual({ entries: body.entries });
+    // Marker never landed, but the response still carries the intended stamp.
+    expect(state.store.get("rent-week")).toBeUndefined();
+    expect(body.weekStartedAt).toBe("2026-07-17T15:00:00.000Z");
+    // Failure was logged server-side rather than surfaced to the UI.
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
+  });
 });

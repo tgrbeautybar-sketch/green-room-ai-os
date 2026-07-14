@@ -36,13 +36,22 @@ export async function POST() {
     // data on a reset the user thinks is status-only.
     const entries: RentEntry[] = current.map(e => ({ ...e, status: "unpaid" as const }));
 
-    // Write the roster FIRST, then the marker. Benign ordering: if the marker
-    // write fails after the roster succeeds, statuses are still correctly reset
-    // (the worse failure — marker set but statuses stale — can't happen).
+    // The roster write is the success point — once statuses are reset, the
+    // reset has effectively landed. A roster-write failure throws and returns
+    // ok:false below (the reset didn't happen).
     await setState("rent-roster", { entries });
 
+    // The rent-week marker is cosmetic ("Rent week started {date}") and
+    // re-stamps on any later reset. If ONLY the marker write fails, do NOT
+    // report failure: the roster is already reset, and telling the UI it failed
+    // would leave the on-screen roster stale while the server is actually reset.
+    // Log it server-side and return ok:true.
     const startedAt = new Date().toISOString();
-    await setState("rent-week", { startedAt });
+    try {
+      await setState("rent-week", { startedAt });
+    } catch (markerErr) {
+      console.error("rent/new-week: roster reset succeeded but marker write failed", markerErr);
+    }
 
     return NextResponse.json({ ok: true, entries, weekStartedAt: startedAt });
   } catch (err) {
