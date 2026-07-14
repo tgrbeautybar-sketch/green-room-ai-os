@@ -133,7 +133,10 @@ export default function RentRollPage() {
     setAddAmount(addType === "room" ? 250 : 200);
   }
 
-  async function save() {
+  // Returns true if the write landed, false if it failed. Still drives saveState
+  // as before — callers that need to gate on the outcome (e.g. the pre-reset
+  // flush in startNewWeek) read the boolean; the auto-save effect ignores it.
+  async function save(): Promise<boolean> {
     // Snapshot what we send; don't overwrite local state on return (avoids clobbering in-flight edits during auto-save).
     const snapshot = JSON.stringify(entries);
     setSaveState("saving");
@@ -147,9 +150,11 @@ export default function RentRollPage() {
       setBaseline(snapshot);
       setSaveState("saved");
       setTimeout(() => setSaveState("idle"), 1500);
+      return true;
     } catch {
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 2400);
+      return false;
     }
   }
 
@@ -179,7 +184,19 @@ export default function RentRollPage() {
         clearTimeout(saveTimerRef.current);
         saveTimerRef.current = null;
       }
-      if (dirty) await save();
+      // The flush MUST land before we reset. save() swallows its own errors and
+      // reports the outcome as a boolean — if the flush failed, abort: resetting
+      // against a stale server roster would wipe the unsaved edit while showing
+      // a success chip. Close the confirm bar so only one retry (the error
+      // alert's "Try again") is offered.
+      if (dirty) {
+        const flushed = await save();
+        if (!flushed) {
+          setResetConfirming(false);
+          setResetError(true);
+          return;
+        }
+      }
 
       const res = await fetch("/api/rent/new-week", { method: "POST" });
       const d = (await res.json()) as { ok: boolean; entries?: RentEntry[]; weekStartedAt?: string | null };
@@ -195,7 +212,9 @@ export default function RentRollPage() {
       setResetDone(true);
       setTimeout(() => setResetDone(false), 2000);
     } catch {
-      // Leave the confirm bar open so she can retry without re-triggering.
+      // Close the confirm bar so only the error alert's single "Try again"
+      // remains — no duplicate retry affordance (bar button + alert button).
+      setResetConfirming(false);
       setResetError(true);
     } finally {
       setResetting(false);
@@ -595,9 +614,6 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 // ---------- Auto-remind card ----------
 
-// "Fri Jul 10, 9:02am" — NY time, lowercase meridiem with no space. Returns
-// null on an invalid timestamp so the caller can drop the time segment
-// entirely rather than show "Invalid Date".
 // "Jul 17" — NY-time month + day the current rent week was started. Returns
 // null on an invalid/blank timestamp so the caller renders nothing rather than
 // "Invalid Date".
