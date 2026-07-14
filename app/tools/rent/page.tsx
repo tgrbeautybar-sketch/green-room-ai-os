@@ -187,13 +187,15 @@ export default function RentRollPage() {
       // The flush MUST land before we reset. save() swallows its own errors and
       // reports the outcome as a boolean — if the flush failed, abort: resetting
       // against a stale server roster would wipe the unsaved edit while showing
-      // a success chip. Close the confirm bar so only one retry (the error
-      // alert's "Try again") is offered.
+      // a success chip. On a flush failure the reset POST never fires, so the
+      // accurate signal is save()'s own "Save failed — retry" state; we do NOT
+      // raise the reset alert here (it would say "couldn't start a new week"
+      // when the real problem is the unsaved edit) — that would double up two
+      // conflicting retry affordances. Just close the confirm bar and stop.
       if (dirty) {
         const flushed = await save();
         if (!flushed) {
           setResetConfirming(false);
-          setResetError(true);
           return;
         }
       }
