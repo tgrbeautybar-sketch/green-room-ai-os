@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getState, setState } from "@/lib/store";
+import { getState, safeGetState, setState } from "@/lib/store";
 
 export const runtime = "nodejs";
 
@@ -24,7 +24,12 @@ const EMPTY: Roster = { entries: [] };
 
 export async function GET() {
   const r = await getState<Roster>("rent-roster");
-  return NextResponse.json(r ?? EMPTY);
+  // "Start a new week" (app/api/rent/new-week) stamps a separate "rent-week"
+  // marker so the UI can show when the current tracking week began. Read it
+  // safely — a missing/unreachable marker just means "no week started yet",
+  // which should degrade to null, never 500 the roster the page depends on.
+  const week = await safeGetState<{ startedAt: string }>("rent-week", { startedAt: "" });
+  return NextResponse.json({ ...(r ?? EMPTY), weekStartedAt: week?.startedAt || null });
 }
 
 export async function POST(req: NextRequest) {
